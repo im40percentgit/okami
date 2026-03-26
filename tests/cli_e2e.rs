@@ -254,8 +254,9 @@ fn cli_delegate_writes_to_file() {
 #[test]
 fn cli_verify_chain_valid_single_token() {
     let dir = TempDir::new().unwrap();
-    let token_file = dir.path().join("token.bin");
+    let chain_file = dir.path().join("chain.bin");
 
+    // Generate issuer keypair.
     okami()
         .args([
             "keygen",
@@ -269,6 +270,7 @@ fn cli_verify_chain_valid_single_token() {
         .assert()
         .success();
 
+    // delegate now always writes a DelegationChain, so verify-chain succeeds.
     okami()
         .args([
             "delegate",
@@ -279,22 +281,20 @@ fn cli_verify_chain_valid_single_token() {
             "--scopes",
             "read:db",
             "--output",
-            token_file.to_str().unwrap(),
+            chain_file.to_str().unwrap(),
         ])
         .assert()
         .success();
 
-    // The token file is a DelegationToken, not a DelegationChain.
-    // verify-chain expects a DelegationChain (bincode). We need to wrap it.
-    // For now, test that passing a bad file gives a non-zero exit.
     okami()
         .args([
             "verify-chain",
             "--chain",
-            token_file.to_str().unwrap(),
+            chain_file.to_str().unwrap(),
         ])
         .assert()
-        .failure(); // token bytes != chain bytes — expected
+        .success()
+        .stdout(predicate::str::contains("Chain VALID"));
 }
 
 #[test]
@@ -305,6 +305,88 @@ fn cli_verify_chain_rejects_missing_file() {
         .failure();
 }
 
+#[test]
+fn cli_verify_chain_two_link_chain() {
+    let dir = TempDir::new().unwrap();
+    let worker_dir = dir.path().join("worker");
+    let chain_file = dir.path().join("chain1.bin");
+    let chain_file2 = dir.path().join("chain2.bin");
+
+    // Generate orchestrator keypair.
+    okami()
+        .args([
+            "keygen",
+            "--trust-domain",
+            "example.com",
+            "--workload",
+            "orchestrator",
+            "--output",
+            dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // Generate worker keypair in a subdirectory.
+    okami()
+        .args([
+            "keygen",
+            "--trust-domain",
+            "example.com",
+            "--workload",
+            "worker/1",
+            "--output",
+            worker_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // First delegation: orchestrator -> worker/1.
+    okami()
+        .args([
+            "delegate",
+            "--from",
+            dir.path().to_str().unwrap(),
+            "--to",
+            "spiffe://example.com/worker/1",
+            "--scopes",
+            "read:db",
+            "--output",
+            chain_file.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // Second delegation: worker/1 -> sub-worker/1 (extends existing chain).
+    okami()
+        .args([
+            "delegate",
+            "--from",
+            worker_dir.to_str().unwrap(),
+            "--to",
+            "spiffe://example.com/sub-worker/1",
+            "--scopes",
+            "read:db",
+            "--chain",
+            chain_file.to_str().unwrap(),
+            "--output",
+            chain_file2.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // verify-chain must succeed and report 2 links.
+    okami()
+        .args([
+            "verify-chain",
+            "--chain",
+            chain_file2.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Chain VALID"))
+        .stdout(predicate::str::contains("Links  : 2"));
+}
+
 // ── tree ──────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -313,6 +395,50 @@ fn cli_tree_rejects_missing_file() {
         .args(["tree", "--chain", "/nonexistent/chain.bin"])
         .assert()
         .failure();
+}
+
+#[test]
+fn cli_tree_shows_spiffe_ids() {
+    let dir = TempDir::new().unwrap();
+    let chain_file = dir.path().join("chain.bin");
+
+    // Generate issuer keypair.
+    okami()
+        .args([
+            "keygen",
+            "--trust-domain",
+            "example.com",
+            "--workload",
+            "orchestrator",
+            "--output",
+            dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // Create a single-token chain.
+    okami()
+        .args([
+            "delegate",
+            "--from",
+            dir.path().to_str().unwrap(),
+            "--to",
+            "spiffe://example.com/worker/42",
+            "--scopes",
+            "read:db",
+            "--output",
+            chain_file.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // tree output must contain the subject SPIFFE ID and scope.
+    okami()
+        .args(["tree", "--chain", chain_file.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("worker/42"))
+        .stdout(predicate::str::contains("read:db"));
 }
 
 // ── help and version ──────────────────────────────────────────────────────────

@@ -61,6 +61,11 @@ enum Commands {
         credential: PathBuf,
     },
     /// Issue a delegation token from one identity to another.
+    ///
+    /// The output is always a DelegationChain (bincode-encoded Vec of tokens).
+    /// If --chain is supplied, the existing chain is loaded and the new token is
+    /// appended; otherwise a single-token chain is created. Both verify-chain and
+    /// tree consume the resulting chain file directly.
     Delegate {
         /// Directory containing the issuer's signing key and credential files.
         #[arg(long)]
@@ -74,7 +79,11 @@ enum Commands {
         /// Token validity in seconds (default: 3600).
         #[arg(long, default_value = "3600")]
         expiry: u64,
-        /// Output file for the token (default: stdout as hex).
+        /// Existing chain file to extend (appends new token to the chain).
+        /// When omitted a single-token chain is created.
+        #[arg(long)]
+        chain: Option<PathBuf>,
+        /// Output file for the chain (default: stdout as hex).
         #[arg(long)]
         output: Option<PathBuf>,
     },
@@ -184,11 +193,21 @@ fn cmd_inspect(credential_path: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Issue a delegation token and produce a DelegationChain file.
+///
+/// If `existing_chain` is provided the chain is loaded and the new token is
+/// appended (the leaf token becomes the parent). Otherwise a single-token
+/// chain is created. The output is always a bincode-encoded DelegationChain
+/// so that `verify-chain` and `tree` can consume it directly.
+///
+/// Issuer scopes when extending a chain are taken from the leaf token; for a
+/// root (no parent chain) the issuer is assumed to hold all requested scopes.
 fn cmd_delegate(
     from_dir: &std::path::Path,
     to_spiffe: &str,
     scopes_str: &str,
     expiry_secs: u64,
+    existing_chain: Option<&std::path::Path>,
     output: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
     // Load issuer identity.
@@ -204,15 +223,32 @@ fn cmd_delegate(
     // Parse subject.
     let subject_id = SpiffeId::parse(to_spiffe)?;
 
-    // Parse scopes.
+    // Parse requested scopes.
     let scopes: Vec<Capability> = scopes_str
         .split(',')
         .filter(|s| !s.trim().is_empty())
         .map(|s| Capability::new(s.trim()))
         .collect::<Result<_, _>>()?;
 
-    // For a root token the issuer has all requested scopes.
-    let issuer_scopes = scopes.clone();
+    // Load existing chain if provided; the leaf becomes the parent token.
+    let existing: Option<DelegationChain> = existing_chain
+        .map(|p| {
+            let bytes = std::fs::read(p)?;
+            DelegationChain::from_bytes(&bytes).map_err(anyhow::Error::from)
+        })
+        .transpose()?;
+
+    // Issuer scopes are the leaf token's scopes when extending, or the
+    // requested scopes themselves for a fresh root token.
+    let issuer_scopes: Vec<Capability> = match &existing {
+        Some(chain) => chain
+            .leaf()
+            .map(|t| t.scopes.clone())
+            .unwrap_or_default(),
+        None => scopes.clone(),
+    };
+
+    let parent: Option<&DelegationToken> = existing.as_ref().and_then(|c| c.leaf());
 
     let token = DelegationToken::issue(
         &issuer,
@@ -220,18 +256,25 @@ fn cmd_delegate(
         scopes,
         &issuer_scopes,
         Duration::from_secs(expiry_secs),
-        None,
+        parent,
     )?;
 
-    let token_bytes = token.to_bytes()?;
+    // Build the output chain (clone existing tokens + new token).
+    let mut chain_tokens: Vec<DelegationToken> = existing
+        .map(|c| c.tokens)
+        .unwrap_or_default();
+    chain_tokens.push(token);
+    let chain = DelegationChain::new(chain_tokens);
+
+    let chain_bytes = chain.to_bytes()?;
 
     match output {
         Some(path) => {
-            std::fs::write(path, &token_bytes)?;
-            println!("Delegation token written to {}", path.display());
+            std::fs::write(path, &chain_bytes)?;
+            println!("Chain written to {}", path.display());
         }
         None => {
-            println!("{}", hex::encode(&token_bytes));
+            println!("{}", hex::encode(&chain_bytes));
         }
     }
 
@@ -283,8 +326,9 @@ fn main() {
             to,
             scopes,
             expiry,
+            chain,
             output,
-        } => cmd_delegate(from, to, scopes, *expiry, output.as_deref()),
+        } => cmd_delegate(from, to, scopes, *expiry, chain.as_deref(), output.as_deref()),
         Commands::VerifyChain { chain } => cmd_verify_chain(chain),
         Commands::Tree { chain } => cmd_tree(chain),
     };

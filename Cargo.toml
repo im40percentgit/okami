@@ -15,9 +15,9 @@ name = "okami"
 path = "src/bin/okami.rs"
 
 [dependencies]
-lupine = { path = "../lupine/crates/lupine" }
-lupine-core = { path = "../lupine/crates/lupine-core" }
-lupine-serial = { path = "../lupine/crates/lupine-serial" }
+lupine = { package = "lupine-pqc", version = "0.1.0" }
+lupine-core = "0.1.0"
+lupine-serial = "0.1.0"
 
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }

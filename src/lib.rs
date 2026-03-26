@@ -2,7 +2,7 @@
 //!
 //! This crate provides SPIFFE-based agent identity with hybrid PQC cryptography
 //! (Ed25519 + ML-DSA-65), OAuth-style delegation tokens, and tamper-evident
-//! audit events. It builds on the [lupine] PQC library.
+//! audit events. It builds on the [lupine-pqc] PQC library.
 //!
 //! # Quick start
 //!

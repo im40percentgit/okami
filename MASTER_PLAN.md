@@ -47,14 +47,14 @@ Okami is a purpose-built agent identity system with post-quantum cryptography at
 
 1. ~~Publish lupine to crates.io~~ (blocking dependency)
 2. ~~Read IETF draft-klrc-aiagent-auth-00~~ (alignment)
-3. Scaffold okami: Cargo.toml, CI, README
-4. Implement identity module + tests
-5. Implement delegation module + tests
-6. Implement audit module + JSON schema + tests
-7. Implement CLI (init, keygen, inspect, delegate, verify-chain, tree) + E2E tests
-8. Write mutual auth example
-9. Property-based tests (proptest) + adversarial input tests
-10. Documentation + README with demo
+3. ~~Scaffold okami: Cargo.toml, CI, README~~
+4. ~~Implement identity module + tests~~
+5. ~~Implement delegation module + tests~~
+6. ~~Implement audit module + JSON schema + tests~~
+7. ~~Implement CLI (init, keygen, inspect, delegate, verify-chain, tree) + E2E tests~~
+8. ~~Write mutual auth example~~
+9. ~~Property-based tests (proptest) + adversarial input tests~~
+10. ~~Documentation + README with demo~~
 
 ## CEO Review Expansions (accepted)
 
@@ -74,6 +74,31 @@ Okami is a purpose-built agent identity system with post-quantum cryptography at
 - CEO plan: `~/.gstack/projects/okami/ceo-plans/2026-03-25-agent-passport-sdk.md`
 - Test plan: `~/.gstack/projects/okami/j-unknown-eng-review-test-plan-20260325-192148.md`
 
+## Phase Status
+
+| Phase | Status | Date |
+|-------|--------|------|
+| Phase 1 — Agent Passport SDK | **completed** | 2026-03-25 |
+| Phase 2 — Agent Identity Platform | planned (gated on Phase 1 adoption) | — |
+
+## Decision Log
+
+| ID | Decision | Rationale | Source |
+|----|----------|-----------|--------|
+| DEC-OKAMI-001 | Single `okami::Error` enum via thiserror | Consistent error handling across all modules | `src/error.rs` |
+| DEC-OKAMI-002 | SPIFFE ID + standalone PQC credential (not X.509) | X.509 PQC tooling is immature; clean separation | `src/identity.rs` |
+| DEC-OKAMI-003 | Key lifecycle in Phase 1 (rotation, expiry, revocation) | Security product without rotation/revocation is a liability | `src/identity.rs` |
+| DEC-OKAMI-004 | 0600 file permissions on private keys | SSH model — refuse to load keys with wider permissions | `src/identity.rs` |
+| DEC-OKAMI-005 | bincode for token serialization | Compact binary format for delegation tokens | `src/delegation.rs` |
+| DEC-OKAMI-006 | Scope as validated string (not enum) | OAuth-style composability with existing IAM | `src/delegation.rs` |
+| DEC-OKAMI-007 | Clock skew tolerance: configurable, default 30s | Addresses Critical Gap #1 | `src/delegation.rs` |
+| DEC-OKAMI-008 | SHA-256 chain hash for tamper-evidence | Standard, fast, sufficient for audit integrity | `src/audit.rs` |
+| DEC-OKAMI-009 | serde_json::Value for event details | Flexible schema for diverse audit event types | `src/audit.rs` |
+| DEC-OKAMI-010 | clap derive API for CLI | Type-safe, ergonomic CLI definition | `src/bin/okami.rs` |
+| DEC-OKAMI-011 | Example uses in-memory credential exchange | Demonstrates concept without network dependency | `examples/mutual_auth.rs` |
+| DEC-OKAMI-012 | proptest for security-critical invariant testing | Property-based testing catches edge cases unit tests miss | `tests/proptest_tests.rs` |
+| DEC-OKAMI-013 | assert_cmd for CLI E2E tests | Real binary tests catch issues library tests miss | `tests/cli_e2e.rs` |
+
 ## Review Status
 
-CEO + ENG CLEARED. 0 unresolved decisions. Ready to implement.
+CEO + ENG CLEARED. Phase 1 complete. 13 decisions documented.

@@ -1,0 +1,98 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/im40percentgit/okami/schema/audit-event.json",
+  "title": "OkamiAuditEvent",
+  "description": "A signed okami audit event. Produced by AuditEvent::sign(). Events form a tamper-evident chain via SHA-256 hashing of previous SignedAuditEvent bincode bytes.",
+  "type": "object",
+  "required": ["event", "signature"],
+  "properties": {
+    "event": {
+      "description": "The unsigned audit event payload.",
+      "type": "object",
+      "required": ["version", "timestamp", "agent_id", "action", "details", "chain_hash"],
+      "properties": {
+        "version": {
+          "description": "Format version byte. Currently 1.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 255
+        },
+        "timestamp": {
+          "description": "UTC timestamp when this event occurred (RFC 3339).",
+          "type": "string",
+          "format": "date-time"
+        },
+        "agent_id": {
+          "description": "SPIFFE ID of the agent that generated this event.",
+          "type": "object",
+          "required": ["uri", "trust_domain_end"],
+          "properties": {
+            "uri": {
+              "description": "Full SPIFFE URI (e.g. spiffe://example.com/agent/worker-1).",
+              "type": "string",
+              "pattern": "^spiffe://[a-zA-Z0-9.-]+/.+"
+            },
+            "trust_domain_end": {
+              "description": "Byte index into uri where trust domain ends (internal field).",
+              "type": "integer",
+              "minimum": 9
+            }
+          }
+        },
+        "action": {
+          "description": "Human-readable action label (e.g. delegation.issued, key.rotated).",
+          "type": "string",
+          "minLength": 1,
+          "examples": [
+            "delegation.issued",
+            "delegation.received",
+            "key.rotated",
+            "key.revoked",
+            "db.query.executed",
+            "llm.invoked"
+          ]
+        },
+        "details": {
+          "description": "Structured details specific to this action. Schema is action-defined.",
+          "type": ["object", "array", "string", "number", "boolean", "null"]
+        },
+        "chain_hash": {
+          "description": "Hex SHA-256 of the previous SignedAuditEvent bincode bytes. Empty string for the first event in a chain.",
+          "type": "string",
+          "pattern": "^([0-9a-f]{64}|)$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "signature": {
+      "description": "PQC signature bytes (hybrid Ed25519+ML-DSA-65, length-prefixed composite format) over the bincode-serialized event.",
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 255
+      },
+      "minItems": 1
+    }
+  },
+  "additionalProperties": false,
+  "examples": [
+    {
+      "event": {
+        "version": 1,
+        "timestamp": "2026-03-25T20:44:37Z",
+        "agent_id": {
+          "uri": "spiffe://example.com/worker/1",
+          "trust_domain_end": 20
+        },
+        "action": "delegation.received",
+        "details": {
+          "issuer": "spiffe://example.com/orchestrator",
+          "scopes": ["read:db", "invoke:llm"]
+        },
+        "chain_hash": ""
+      },
+      "signature": [64, 0, 0, 0]
+    }
+  ]
+}

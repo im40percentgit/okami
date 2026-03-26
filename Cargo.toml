@@ -1,0 +1,37 @@
+[package]
+name = "okami"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Post-quantum cryptographic identity for AI agents"
+rust-version = "1.75"
+repository = "https://github.com/im40percentgit/okami"
+homepage = "https://github.com/im40percentgit/okami"
+keywords = ["post-quantum", "cryptography", "identity", "agent", "spiffe"]
+categories = ["cryptography", "authentication"]
+
+[[bin]]
+name = "okami"
+path = "src/bin/okami.rs"
+
+[dependencies]
+lupine = { path = "../lupine/crates/lupine" }
+lupine-core = { path = "../lupine/crates/lupine-core" }
+lupine-serial = { path = "../lupine/crates/lupine-serial" }
+
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.10"
+hex = "0.4"
+bincode = "1"
+toml = "0.8"
+
+[dev-dependencies]
+proptest = "1"
+assert_cmd = "2"
+predicates = "3"
+tempfile = "3"

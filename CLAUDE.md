@@ -6,7 +6,7 @@ Okami is a Rust crate providing post-quantum cryptographic identity for AI agent
 
 ## Stack
 
-- **Language:** Rust 2021 (MSRV 1.75)
+- **Language:** Rust 2021 (MSRV 1.85)
 - **Build:** Cargo
 - **PQC:** lupine (FIPS 203/204/205, hybrid PQC/classical)
 - **Testing:** cargo test, proptest, assert_cmd (CLI E2E)

@@ -125,9 +125,7 @@ impl SpiffeId {
             .ok_or_else(|| Error::InvalidSpiffeId(format!("must start with 'spiffe://': {s}")))?;
 
         if rest.is_empty() {
-            return Err(Error::InvalidSpiffeId(
-                "trust domain is empty".to_string(),
-            ));
+            return Err(Error::InvalidSpiffeId("trust domain is empty".to_string()));
         }
 
         // No query strings or fragments.
@@ -139,9 +137,7 @@ impl SpiffeId {
 
         // Split trust domain from path.
         let slash_pos = rest.find('/').ok_or_else(|| {
-            Error::InvalidSpiffeId(
-                "missing workload path (no '/' after trust domain)".to_string(),
-            )
+            Error::InvalidSpiffeId("missing workload path (no '/' after trust domain)".to_string())
         })?;
 
         let trust_domain = &rest[..slash_pos];
@@ -162,9 +158,7 @@ impl SpiffeId {
 
         // Workload path must be non-empty (more than just "/").
         if path.len() <= 1 {
-            return Err(Error::InvalidSpiffeId(
-                "workload path is empty".to_string(),
-            ));
+            return Err(Error::InvalidSpiffeId("workload path is empty".to_string()));
         }
 
         // 9 = len("spiffe://"), slash_pos gives end of trust domain within `rest`
@@ -354,9 +348,8 @@ impl AgentIdentity {
     ///
     /// Returns [`Error::Crypto`] if signing fails.
     pub fn sign(&self, data: &[u8]) -> Result<Vec<u8>> {
-        lupine::easy::sign(&self.signing_key, data).map_err(|_e| {
-            Error::Crypto(lupine_core::Error::Signing)
-        })
+        lupine::easy::sign(&self.signing_key, data)
+            .map_err(|_e| Error::Crypto(lupine_core::Error::Signing))
     }
 
     /// Verify a signature over `data` using this identity's verifying key.
@@ -368,9 +361,8 @@ impl AgentIdentity {
     /// Returns [`Error::Crypto`] if the signature bytes are structurally invalid.
     pub fn verify(&self, data: &[u8], signature: &[u8]) -> Result<bool> {
         let vk = self.signing_key.verifying_key();
-        lupine::easy::verify(&vk, data, signature).map_err(|_e| {
-            Error::Crypto(lupine_core::Error::Verification)
-        })
+        lupine::easy::verify(&vk, data, signature)
+            .map_err(|_e| Error::Crypto(lupine_core::Error::Verification))
     }
 
     /// Verify a peer's credential using the peer's own embedded verifying key.
@@ -440,9 +432,8 @@ impl AgentIdentity {
     // ── Private helpers ──────────────────────────────────────────────────────
 
     fn generate_for(spiffe_id: SpiffeId) -> Result<Self> {
-        let keypair = lupine::easy::generate_keys().map_err(|_| {
-            Error::Crypto(lupine_core::Error::KeyGeneration)
-        })?;
+        let keypair = lupine::easy::generate_keys()
+            .map_err(|_| Error::Crypto(lupine_core::Error::KeyGeneration))?;
         let verifying_key_bytes = keypair.sign_pk.to_bytes();
         let now = Utc::now();
         let credential = PqcCredential {
@@ -653,7 +644,10 @@ mod tests {
     fn agent_identity_spiffe_id_matches() {
         with_large_stack(|| {
             let identity = AgentIdentity::new("example.com", "agent/test").unwrap();
-            assert_eq!(identity.spiffe_id().as_str(), "spiffe://example.com/agent/test");
+            assert_eq!(
+                identity.spiffe_id().as_str(),
+                "spiffe://example.com/agent/test"
+            );
         });
     }
 
@@ -681,7 +675,10 @@ mod tests {
             // Also verify that the signing key is the same by checking signatures match.
             let sig1 = identity.sign(data).unwrap();
             let sig2 = identity2.sign(data).unwrap();
-            assert_eq!(sig1, sig2, "deterministic signing: same key must produce same sig");
+            assert_eq!(
+                sig1, sig2,
+                "deterministic signing: same key must produce same sig"
+            );
         });
     }
 

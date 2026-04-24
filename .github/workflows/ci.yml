@@ -15,7 +15,7 @@ jobs:
 
       - name: Install Rust 1.75 (MSRV)
         run: |
-          rustup toolchain install 1.75 --profile minimal --component rustfmt clippy
+          rustup toolchain install 1.75 --profile minimal --component rustfmt --component clippy
           rustup override set 1.75
 
       - name: Cache Cargo

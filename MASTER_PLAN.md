@@ -74,6 +74,27 @@ Okami is a purpose-built agent identity system with post-quantum cryptography at
 - CEO plan: `~/.gstack/projects/okami/ceo-plans/2026-03-25-agent-passport-sdk.md`
 - Test plan: `~/.gstack/projects/okami/j-unknown-eng-review-test-plan-20260325-192148.md`
 
+## Security Hardening Pass — 2026-04-24
+
+A `/cso` audit (daily mode, 8/10 confidence gate) surfaced 7 findings: 1 CRITICAL, 2 HIGH, 4 MEDIUM. All shipped via separate PRs:
+
+| PR | Severity | Closed |
+|----|----------|--------|
+| [#1](https://github.com/im40percentgit/okami/pull/1) | infra×3 | Findings #5 (Cargo.lock tracking), #6 (CI absent), #7 (cargo-audit not wired) |
+| [#2](https://github.com/im40percentgit/okami/pull/2) | **CRITICAL** | Finding #1 — token issuer/credential SPIFFE ID mismatch was unchecked, allowing any keypair holder to forge tokens |
+| [#3](https://github.com/im40percentgit/okami/pull/3) | HIGH × 2 | Findings #2 + #3 — `from_stored` re-minted credential timestamps; `cmd_delegate` discarded the on-disk credential |
+| [#4](https://github.com/im40percentgit/okami/pull/4) | MEDIUM | Finding #4 — bincode 1.x deserialization without allocation cap |
+
+Three appendix items below the daily gate (cross-protocol signature reuse, `load_signing_key` owner UID check, TOCTOU on permission check) are deferred for the next `/cso --comprehensive` pass.
+
+A separate Dependabot alert (`GHSA-cq8v-f236-94qc`, `rand` low-severity unsoundness with custom loggers calling `rand::rng()`) is open but does not affect okami's code paths — random number generation goes through lupine, not `rand::rng()` directly.
+
+Side effects of the pass:
+- MSRV bumped from 1.75 to 1.85 (forced by `signature 3.0.0-rc.10` requiring `edition2024`).
+- CI now runs on every push to main and every PR (test + clippy + fmt + cargo-audit).
+- `Cargo.lock` is now tracked.
+- 11 new tests across the four PRs (security-specific: issuer mismatch rejection, timestamp preservation, key/credential binding, bincode bounds, oversized-input rejection, plus a 64-case proptest for from_bytes safety).
+
 ## Phase Status
 
 | Phase | Status | Date |
@@ -98,7 +119,10 @@ Okami is a purpose-built agent identity system with post-quantum cryptography at
 | DEC-OKAMI-011 | Example uses in-memory credential exchange | Demonstrates concept without network dependency | `examples/mutual_auth.rs` |
 | DEC-OKAMI-012 | proptest for security-critical invariant testing | Property-based testing catches edge cases unit tests miss | `tests/proptest_tests.rs` |
 | DEC-OKAMI-013 | assert_cmd for CLI E2E tests | Real binary tests catch issues library tests miss | `tests/cli_e2e.rs` |
+| DEC-OKAMI-014 | DelegationToken::verify rejects mismatched issuer/embedded-credential SPIFFE ID | Without this binding check the embedded credential can be from a different identity than the claimed issuer; allows full bypass of self-contained verification | `src/delegation.rs` |
+| DEC-OKAMI-015 | AgentIdentity::from_stored takes a PqcCredential and verifies key/credential pairing | Re-minting timestamps on every load made expiry illusory and broke revocation-by-bytes; the binding check catches mismatched signing.key/credential.bin pairs | `src/identity.rs` |
+| DEC-OKAMI-016 | Bounded bincode deserialization with per-type input-size caps + `with_limit` | Bincode 1.x has no default allocation cap; a crafted 8-byte length prefix triggers exabyte allocation; well-formed oversized inputs deserve rejection too | `src/delegation.rs`, `src/identity.rs`, `src/audit.rs` |
 
 ## Review Status
 
-CEO + ENG CLEARED. Phase 1 complete. 13 decisions documented.
+CEO + ENG CLEARED. Phase 1 complete. 16 decisions documented. Security hardening pass (/cso 2026-04-24) merged across PRs #1-#4.

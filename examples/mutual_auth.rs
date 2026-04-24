@@ -57,14 +57,8 @@ fn main() {
     let orchestrator_cred = orchestrator.credential();
     let worker_cred = worker.credential();
 
-    println!(
-        "Orchestrator credential algo : v{}",
-        orchestrator_cred.algo
-    );
-    println!(
-        "Worker credential algo       : v{}",
-        worker_cred.algo
-    );
+    println!("Orchestrator credential algo : v{}", orchestrator_cred.algo);
+    println!("Worker credential algo       : v{}", worker_cred.algo);
     println!(
         "Orchestrator verifying key   : {} bytes",
         orchestrator_cred.verifying_key_bytes.len()
@@ -108,10 +102,8 @@ fn main() {
     println!("Signature length: {} bytes", signature.len());
 
     // Worker verifies using orchestrator's embedded verifying key.
-    let vk = lupine::sign::HybridVerifyingKey65::from_bytes(
-        &orchestrator_cred.verifying_key_bytes,
-    )
-    .unwrap();
+    let vk = lupine::sign::HybridVerifyingKey65::from_bytes(&orchestrator_cred.verifying_key_bytes)
+        .unwrap();
     let valid = std::thread::Builder::new()
         .stack_size(32 * 1024 * 1024)
         .spawn(move || lupine::easy::verify(&vk, message, &signature).unwrap())
@@ -273,11 +265,7 @@ fn main() {
     );
 
     // Verify audit chain.
-    okami::audit::verify_audit_chain(
-        &[signed1, signed2],
-        &[worker_vk, worker3_vk],
-    )
-    .unwrap();
+    okami::audit::verify_audit_chain(&[signed1, signed2], &[worker_vk, worker3_vk]).unwrap();
     println!("Audit chain verified: OK");
 
     println!("\n=== Example complete ===");

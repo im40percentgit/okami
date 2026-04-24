@@ -262,8 +262,7 @@ impl DelegationToken {
 
     /// Serialize this token to bytes (bincode).
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        bincode::serialize(self)
-            .map_err(|e| Error::Serialization(format!("token serialize: {e}")))
+        bincode::serialize(self).map_err(|e| Error::Serialization(format!("token serialize: {e}")))
     }
 
     /// Deserialize a token from bytes (bincode).
@@ -380,8 +379,7 @@ impl DelegationChain {
 
     /// Serialize this chain to bytes (bincode).
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        bincode::serialize(self)
-            .map_err(|e| Error::Serialization(format!("chain serialize: {e}")))
+        bincode::serialize(self).map_err(|e| Error::Serialization(format!("chain serialize: {e}")))
     }
 
     /// Deserialize a chain from bytes (bincode).

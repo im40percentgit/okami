@@ -31,7 +31,10 @@ fn cli_init_creates_okami_dir() {
         .stdout(predicate::str::contains("Initialized .okami/"))
         .stdout(predicate::str::contains("example.com"));
 
-    assert!(dir.path().join(".okami").exists(), ".okami/ must be created");
+    assert!(
+        dir.path().join(".okami").exists(),
+        ".okami/ must be created"
+    );
     assert!(
         dir.path().join(".okami/signing.key").exists(),
         "signing.key must be created"
@@ -246,7 +249,10 @@ fn cli_delegate_writes_to_file() {
         .stdout(predicate::str::contains("written to"));
 
     assert!(token_file.exists(), "token file must be created");
-    assert!(token_file.metadata().unwrap().len() > 0, "token file must be non-empty");
+    assert!(
+        token_file.metadata().unwrap().len() > 0,
+        "token file must be non-empty"
+    );
 }
 
 // ── verify-chain ──────────────────────────────────────────────────────────────
@@ -287,11 +293,7 @@ fn cli_verify_chain_valid_single_token() {
         .success();
 
     okami()
-        .args([
-            "verify-chain",
-            "--chain",
-            chain_file.to_str().unwrap(),
-        ])
+        .args(["verify-chain", "--chain", chain_file.to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::contains("Chain VALID"));
@@ -376,11 +378,7 @@ fn cli_verify_chain_two_link_chain() {
 
     // verify-chain must succeed and report 2 links.
     okami()
-        .args([
-            "verify-chain",
-            "--chain",
-            chain_file2.to_str().unwrap(),
-        ])
+        .args(["verify-chain", "--chain", chain_file2.to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::contains("Chain VALID"))
@@ -461,8 +459,5 @@ fn cli_no_args_shows_help() {
 
 #[test]
 fn cli_unknown_subcommand_fails() {
-    okami()
-        .args(["nonexistent-command"])
-        .assert()
-        .failure();
+    okami().args(["nonexistent-command"]).assert().failure();
 }

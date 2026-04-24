@@ -178,7 +178,10 @@ fn cmd_inspect(credential_path: &std::path::Path) -> anyhow::Result<()> {
 
     println!("PQC Credential");
     println!("  SPIFFE ID      : {}", cred.spiffe_id);
-    println!("  Algorithm      : v{} (hybrid Ed25519+ML-DSA-65)", cred.algo);
+    println!(
+        "  Algorithm      : v{} (hybrid Ed25519+ML-DSA-65)",
+        cred.algo
+    );
     println!("  Created at     : {}", cred.created_at);
     println!("  Expires at     : {}", cred.expires_at);
     println!(
@@ -241,10 +244,7 @@ fn cmd_delegate(
     // Issuer scopes are the leaf token's scopes when extending, or the
     // requested scopes themselves for a fresh root token.
     let issuer_scopes: Vec<Capability> = match &existing {
-        Some(chain) => chain
-            .leaf()
-            .map(|t| t.scopes.clone())
-            .unwrap_or_default(),
+        Some(chain) => chain.leaf().map(|t| t.scopes.clone()).unwrap_or_default(),
         None => scopes.clone(),
     };
 
@@ -260,9 +260,7 @@ fn cmd_delegate(
     )?;
 
     // Build the output chain (clone existing tokens + new token).
-    let mut chain_tokens: Vec<DelegationToken> = existing
-        .map(|c| c.tokens)
-        .unwrap_or_default();
+    let mut chain_tokens: Vec<DelegationToken> = existing.map(|c| c.tokens).unwrap_or_default();
     chain_tokens.push(token);
     let chain = DelegationChain::new(chain_tokens);
 
@@ -289,7 +287,11 @@ fn cmd_verify_chain(chain_path: &std::path::Path) -> anyhow::Result<()> {
         Ok(()) => {
             println!("Chain VALID");
             println!("  Links  : {}", chain.tokens.len());
-            let scopes: Vec<&str> = chain.effective_scopes().iter().map(|s| s.as_str()).collect();
+            let scopes: Vec<&str> = chain
+                .effective_scopes()
+                .iter()
+                .map(|s| s.as_str())
+                .collect();
             println!("  Scopes : {}", scopes.join(", "));
         }
         Err(e) => {
@@ -328,7 +330,14 @@ fn main() {
             expiry,
             chain,
             output,
-        } => cmd_delegate(from, to, scopes, *expiry, chain.as_deref(), output.as_deref()),
+        } => cmd_delegate(
+            from,
+            to,
+            scopes,
+            *expiry,
+            chain.as_deref(),
+            output.as_deref(),
+        ),
         Commands::VerifyChain { chain } => cmd_verify_chain(chain),
         Commands::Tree { chain } => cmd_tree(chain),
     };

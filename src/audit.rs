@@ -211,10 +211,7 @@ impl SignedAuditEvent {
 ///
 /// Returns [`Error::AuditError`] if any structural check fails, or propagates
 /// crypto/serialization errors.
-pub fn verify_audit_chain(
-    events: &[SignedAuditEvent],
-    verifying_keys: &[Vec<u8>],
-) -> Result<()> {
+pub fn verify_audit_chain(events: &[SignedAuditEvent], verifying_keys: &[Vec<u8>]) -> Result<()> {
     if events.len() != verifying_keys.len() {
         return Err(Error::AuditError(
             "events and verifying_keys slices must have the same length".to_string(),
@@ -297,12 +294,7 @@ mod tests {
     fn audit_event_with_chain_hash() {
         with_large_stack(|| {
             let id = SpiffeId::new("example.com", "agent/test").unwrap();
-            let ev = AuditEvent::new(
-                id,
-                "key.rotated",
-                json!({}),
-                Some("deadbeef".to_string()),
-            );
+            let ev = AuditEvent::new(id, "key.rotated", json!({}), Some("deadbeef".to_string()));
             assert_eq!(ev.chain_hash, "deadbeef");
         });
     }
@@ -331,12 +323,7 @@ mod tests {
             let signer = AgentIdentity::new("example.com", "agent/signer").unwrap();
             let other = AgentIdentity::new("example.com", "agent/other").unwrap();
             let vk_bytes = other.credential().verifying_key_bytes.clone();
-            let ev = AuditEvent::new(
-                signer.spiffe_id().clone(),
-                "test.action",
-                json!({}),
-                None,
-            );
+            let ev = AuditEvent::new(signer.spiffe_id().clone(), "test.action", json!({}), None);
             let signed = ev.sign(&signer).unwrap();
             // Verify with wrong key should return Ok(false).
             assert!(!signed.verify(&vk_bytes).unwrap());
@@ -348,12 +335,7 @@ mod tests {
         with_large_stack(|| {
             let identity = AgentIdentity::new("example.com", "agent/test").unwrap();
             let vk_bytes = identity.credential().verifying_key_bytes.clone();
-            let ev = AuditEvent::new(
-                identity.spiffe_id().clone(),
-                "test.action",
-                json!({}),
-                None,
-            );
+            let ev = AuditEvent::new(identity.spiffe_id().clone(), "test.action", json!({}), None);
             let mut signed = ev.sign(&identity).unwrap();
             signed.signature[0] ^= 0xFF;
             // Tampered signature: verify returns Ok(false).
@@ -398,12 +380,7 @@ mod tests {
     fn signed_event_hash_hex_is_64_chars() {
         with_large_stack(|| {
             let identity = AgentIdentity::new("example.com", "agent/test").unwrap();
-            let ev = AuditEvent::new(
-                identity.spiffe_id().clone(),
-                "test.action",
-                json!({}),
-                None,
-            );
+            let ev = AuditEvent::new(identity.spiffe_id().clone(), "test.action", json!({}), None);
             let signed = ev.sign(&identity).unwrap();
             let h = signed.hash_hex().unwrap();
             assert_eq!(h.len(), 64);
@@ -416,12 +393,7 @@ mod tests {
             let identity = AgentIdentity::new("example.com", "agent/test").unwrap();
             let vk_bytes = identity.credential().verifying_key_bytes.clone();
 
-            let ev1 = AuditEvent::new(
-                identity.spiffe_id().clone(),
-                "action.one",
-                json!({}),
-                None,
-            );
+            let ev1 = AuditEvent::new(identity.spiffe_id().clone(), "action.one", json!({}), None);
             let signed1 = ev1.sign(&identity).unwrap();
             let hash1 = signed1.hash_hex().unwrap();
 
@@ -433,11 +405,7 @@ mod tests {
             );
             let signed2 = ev2.sign(&identity).unwrap();
 
-            verify_audit_chain(
-                &[signed1, signed2],
-                &[vk_bytes.clone(), vk_bytes],
-            )
-            .unwrap();
+            verify_audit_chain(&[signed1, signed2], &[vk_bytes.clone(), vk_bytes]).unwrap();
         });
     }
 
@@ -447,12 +415,7 @@ mod tests {
             let identity = AgentIdentity::new("example.com", "agent/test").unwrap();
             let vk_bytes = identity.credential().verifying_key_bytes.clone();
 
-            let ev1 = AuditEvent::new(
-                identity.spiffe_id().clone(),
-                "action.one",
-                json!({}),
-                None,
-            );
+            let ev1 = AuditEvent::new(identity.spiffe_id().clone(), "action.one", json!({}), None);
             let signed1 = ev1.sign(&identity).unwrap();
 
             // Use wrong hash for ev2.
@@ -460,15 +423,13 @@ mod tests {
                 identity.spiffe_id().clone(),
                 "action.two",
                 json!({}),
-                Some("0000000000000000000000000000000000000000000000000000000000000000"
-                    .to_string()),
+                Some(
+                    "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+                ),
             );
             let signed2 = ev2.sign(&identity).unwrap();
 
-            let result = verify_audit_chain(
-                &[signed1, signed2],
-                &[vk_bytes.clone(), vk_bytes],
-            );
+            let result = verify_audit_chain(&[signed1, signed2], &[vk_bytes.clone(), vk_bytes]);
             assert!(matches!(result, Err(Error::AuditError(_))));
         });
     }
@@ -497,12 +458,7 @@ mod tests {
         with_large_stack(|| {
             let identity = AgentIdentity::new("example.com", "agent/test").unwrap();
             let vk_bytes = identity.credential().verifying_key_bytes.clone();
-            let ev = AuditEvent::new(
-                identity.spiffe_id().clone(),
-                "action.one",
-                json!({}),
-                None,
-            );
+            let ev = AuditEvent::new(identity.spiffe_id().clone(), "action.one", json!({}), None);
             let signed = ev.sign(&identity).unwrap();
             // Two events but one key — mismatch.
             let result = verify_audit_chain(&[signed], &[vk_bytes.clone(), vk_bytes]);

@@ -434,3 +434,24 @@ fn adversarial_boundary_expiry() {
         fresh_token.verify(Some(Duration::from_secs(30))).unwrap();
     });
 }
+
+// ── /cso Finding #4: bounded deserialization proptest ────────────────────────
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    /// Random byte buffers up to 100 KiB fed to DelegationChain::from_bytes must
+    /// never panic — they may return Ok or Err but must terminate safely.
+    ///
+    /// This is the security-critical regression test for /cso Finding #4
+    /// (fingerprint `30a553fc`): bincode 1.x allocation DoS via crafted u64
+    /// length prefixes. The bounded deserializer must catch these before any
+    /// allocation attempt.
+    #[test]
+    fn prop_chain_from_bytes_never_panics_large_input(
+        bytes in proptest::collection::vec(any::<u8>(), 0..102_400),
+    ) {
+        // Must not panic, OOM, or hang — may return Ok or Err.
+        let _ = DelegationChain::from_bytes(&bytes);
+    }
+}

@@ -26,6 +26,14 @@ use crate::identity::{AgentIdentity, SpiffeId};
 /// Version byte for audit event format. Version 1 = current format.
 pub const AUDIT_EVENT_VERSION: u8 = 1;
 
+/// Maximum byte size accepted by [`SignedAuditEvent::from_bytes`].
+///
+/// Events contain a `details_json` string (variable-length JSON), a PQC signature
+/// (~3.3 KiB for ML-DSA-65), and metadata fields. 16 KiB allows generous JSON
+/// detail blobs while blocking allocation-DoS via crafted length prefixes.
+/// See `/cso` audit Finding #4.
+pub const MAX_SIGNED_AUDIT_EVENT_BYTES: u64 = 16 * 1024;
+
 // ── AuditEvent ────────────────────────────────────────────────────────────────
 
 /// An unsigned audit event recording an agent action.
@@ -185,8 +193,29 @@ impl SignedAuditEvent {
     }
 
     /// Deserialize from bytes (bincode).
+    ///
+    /// Enforces a [`MAX_SIGNED_AUDIT_EVENT_BYTES`] allocation cap to prevent DoS
+    /// via crafted length-prefix fields. See `/cso` audit Finding #4 (fingerprint
+    /// `30a553fc`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Serialization`] if the input exceeds `MAX_SIGNED_AUDIT_EVENT_BYTES` or
+    /// if bincode decoding fails.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        bincode::deserialize(bytes)
+        if bytes.len() as u64 > MAX_SIGNED_AUDIT_EVENT_BYTES {
+            return Err(Error::Serialization(format!(
+                "input exceeds maximum size ({} > {})",
+                bytes.len(),
+                MAX_SIGNED_AUDIT_EVENT_BYTES
+            )));
+        }
+        use bincode::Options as _;
+        bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .allow_trailing_bytes()
+            .with_limit(MAX_SIGNED_AUDIT_EVENT_BYTES)
+            .deserialize(bytes)
             .map_err(|e| Error::Serialization(format!("signed event deserialize: {e}")))
     }
 }
@@ -486,5 +515,26 @@ mod tests {
             assert!(signed.verify(&vk_bytes).unwrap());
             assert_eq!(signed.event.details(), details);
         });
+    }
+
+    // ── Security: allocation-DoS rejection ────────────────────────────────────
+
+    /// Feeding a payload whose first 8 bytes are 0xFF (a u64 length prefix of
+    /// ~18 exabytes) to SignedAuditEvent::from_bytes must return Err, not panic.
+    /// Regression test for /cso Finding #4 (fingerprint `30a553fc`).
+    #[test]
+    fn signed_audit_event_from_bytes_rejects_oversized_length_prefix() {
+        let mut crafted = vec![0xFFu8; 8];
+        crafted.extend_from_slice(&[0u8; 16]);
+        let result = SignedAuditEvent::from_bytes(&crafted);
+        assert!(
+            result.is_err(),
+            "oversized length prefix must be rejected, got Ok"
+        );
+        assert!(
+            matches!(result, Err(Error::Serialization(_))),
+            "expected Serialization error, got: {:?}",
+            result
+        );
     }
 }

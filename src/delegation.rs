@@ -17,6 +17,20 @@
 // @decision DEC-OKAMI-007 Clock skew tolerance: configurable, default 30s — accepted.
 // Rationale: distributed systems have clock drift. 30s prevents spurious failures
 // in well-behaved environments. Operators can set it to zero.
+//
+// @decision DEC-OKAMI-016
+// @title Bounded bincode deserialization to prevent allocation DoS
+// @status accepted
+// @rationale bincode 1.x reads a raw u64 length prefix before allocating for
+//   Vec<T>/String fields. A crafted payload with `[0xFF; 8]` as the first field
+//   causes an immediate multi-exabyte allocation attempt, crashing the process.
+//   Fix: use `DefaultOptions::with_fixint_encoding().allow_trailing_bytes().with_limit(N)`
+//   which exactly mirrors the free-function default encoding but adds an allocation cap.
+//   The legacy `bincode::config()` builder internally expands to the same Options chain
+//   (confirmed via bincode 1.3.3 src/config/legacy.rs) but is deprecated since 1.3.0.
+//   Limits: DelegationToken 8 KiB (embeds PqcCredential ~2 KiB + sig + scopes),
+//   DelegationChain 32 KiB (max 3 tokens × 8 KiB + headroom).
+//   See `/cso` audit Finding #4 (fingerprint `30a553fc`).
 
 use std::time::Duration as StdDuration;
 
@@ -35,6 +49,20 @@ pub const MAX_DELEGATION_DEPTH: u32 = 2;
 
 /// Default clock skew tolerance in seconds.
 pub const DEFAULT_CLOCK_SKEW_SECS: u64 = 30;
+
+/// Maximum byte size accepted by [`DelegationToken::from_bytes`].
+///
+/// A token embeds the issuer's [`PqcCredential`] (~2 KiB), the PQC signature
+/// (~3.3 KiB for ML-DSA-65), SPIFFE IDs, scopes, and timestamps. 8 KiB provides
+/// generous headroom while blocking allocation-DoS via crafted length prefixes.
+/// See `/cso` audit Finding #4.
+pub const MAX_TOKEN_BYTES: u64 = 8 * 1024;
+
+/// Maximum byte size accepted by [`DelegationChain::from_bytes`].
+///
+/// A chain holds up to 3 tokens (max depth). At 8 KiB each plus framing,
+/// 32 KiB provides ample headroom. See `/cso` audit Finding #4.
+pub const MAX_CHAIN_BYTES: u64 = 32 * 1024;
 
 // ── Capability ────────────────────────────────────────────────────────────────
 
@@ -292,8 +320,28 @@ impl DelegationToken {
     }
 
     /// Deserialize a token from bytes (bincode).
+    ///
+    /// Enforces a [`MAX_TOKEN_BYTES`] allocation cap to prevent DoS via crafted
+    /// length-prefix fields. See `/cso` audit Finding #4 (fingerprint `30a553fc`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Serialization`] if the input exceeds `MAX_TOKEN_BYTES` or
+    /// if bincode decoding fails.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        bincode::deserialize(bytes)
+        if bytes.len() as u64 > MAX_TOKEN_BYTES {
+            return Err(Error::Serialization(format!(
+                "input exceeds maximum size ({} > {})",
+                bytes.len(),
+                MAX_TOKEN_BYTES
+            )));
+        }
+        use bincode::Options as _;
+        bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .allow_trailing_bytes()
+            .with_limit(MAX_TOKEN_BYTES)
+            .deserialize(bytes)
             .map_err(|e| Error::Serialization(format!("token deserialize: {e}")))
     }
 
@@ -409,8 +457,28 @@ impl DelegationChain {
     }
 
     /// Deserialize a chain from bytes (bincode).
+    ///
+    /// Enforces a [`MAX_CHAIN_BYTES`] allocation cap to prevent DoS via crafted
+    /// length-prefix fields. See `/cso` audit Finding #4 (fingerprint `30a553fc`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Serialization`] if the input exceeds `MAX_CHAIN_BYTES` or
+    /// if bincode decoding fails.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        bincode::deserialize(bytes)
+        if bytes.len() as u64 > MAX_CHAIN_BYTES {
+            return Err(Error::Serialization(format!(
+                "input exceeds maximum size ({} > {})",
+                bytes.len(),
+                MAX_CHAIN_BYTES
+            )));
+        }
+        use bincode::Options as _;
+        bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .allow_trailing_bytes()
+            .with_limit(MAX_CHAIN_BYTES)
+            .deserialize(bytes)
             .map_err(|e| Error::Serialization(format!("chain deserialize: {e}")))
     }
 
@@ -1010,6 +1078,96 @@ mod tests {
             assert!(
                 matches!(result, Err(Error::ChainVerificationFailed(_))),
                 "expected ChainVerificationFailed, got: {result:?}"
+            );
+        });
+    }
+
+    // ── Security: allocation-DoS rejection (Finding #4) ───────────────────────
+
+    /// Feeding a payload whose first 8 bytes are 0xFF (a u64 length prefix of
+    /// ~18 exabytes) to DelegationToken::from_bytes must return Err, not panic.
+    /// Regression test for /cso Finding #4 (fingerprint `30a553fc`).
+    #[test]
+    fn delegation_token_from_bytes_rejects_oversized_length_prefix() {
+        let mut crafted = vec![0xFFu8; 8];
+        crafted.extend_from_slice(&[0u8; 16]);
+        let result = DelegationToken::from_bytes(&crafted);
+        assert!(
+            result.is_err(),
+            "oversized length prefix must be rejected, got Ok"
+        );
+        assert!(
+            matches!(result, Err(Error::Serialization(_))),
+            "expected Serialization error, got: {:?}",
+            result
+        );
+    }
+
+    /// Feeding a payload whose first 8 bytes are 0xFF to DelegationChain::from_bytes
+    /// must return Err, not panic or OOM.
+    /// Regression test for /cso Finding #4 (fingerprint `30a553fc`).
+    #[test]
+    fn delegation_chain_from_bytes_rejects_oversized_length_prefix() {
+        let mut crafted = vec![0xFFu8; 8];
+        crafted.extend_from_slice(&[0u8; 16]);
+        let result = DelegationChain::from_bytes(&crafted);
+        assert!(
+            result.is_err(),
+            "oversized length prefix must be rejected, got Ok"
+        );
+        assert!(
+            matches!(result, Err(Error::Serialization(_))),
+            "expected Serialization error, got: {:?}",
+            result
+        );
+    }
+
+    /// A valid but oversized DelegationToken (serialized size > MAX_TOKEN_BYTES)
+    /// must be rejected by from_bytes before bincode is invoked.
+    ///
+    /// Uses 500 scopes (~20 chars each) to push the token over 8 KiB.
+    /// Regression test for the boundary invariant gap reported by the tester.
+    #[test]
+    fn delegation_token_from_bytes_rejects_oversized_valid_input() {
+        with_large_stack(|| {
+            let issuer = AgentIdentity::new("example.com", "orchestrator").unwrap();
+            let subject_id = SpiffeId::new("example.com", "worker/oversized").unwrap();
+
+            // 500 scopes of ~20 chars each yields ~20 KiB serialized — well over MAX_TOKEN_BYTES (8 KiB).
+            let big_scopes: Vec<Capability> = (0..500)
+                .map(|i| Capability::new(&format!("scope:aaaaaaaaaaa{i:04}")).unwrap())
+                .collect();
+            let big_issuer_scopes = big_scopes.clone();
+
+            let big_token = DelegationToken::issue(
+                &issuer,
+                subject_id,
+                big_scopes,
+                &big_issuer_scopes,
+                std::time::Duration::from_secs(3600),
+                None,
+            )
+            .expect("issue oversized token failed");
+
+            let big_bytes = big_token
+                .to_bytes()
+                .expect("to_bytes failed for oversized token");
+            assert!(
+                big_bytes.len() as u64 > MAX_TOKEN_BYTES,
+                "oversized token must exceed MAX_TOKEN_BYTES ({} <= {})",
+                big_bytes.len(),
+                MAX_TOKEN_BYTES
+            );
+
+            let result = DelegationToken::from_bytes(&big_bytes);
+            assert!(
+                result.is_err(),
+                "Expected Err for oversized valid token, got Ok"
+            );
+            let err_str = format!("{:?}", result);
+            assert!(
+                err_str.contains("exceeds maximum"),
+                "error must mention 'exceeds maximum', got: {err_str}"
             );
         });
     }

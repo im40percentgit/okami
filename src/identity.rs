@@ -41,6 +41,18 @@
 //!   to load keys with permissions wider than 0600 forces operators to handle
 //!   key material correctly. This matches the SSH convention, which users
 //!   already understand. Windows support is deferred (no equivalent ACL model).
+//!
+//! @decision DEC-OKAMI-016
+//! @title Bounded bincode deserialization to prevent allocation DoS
+//! @status accepted
+//! @rationale bincode 1.x reads a raw u64 length prefix before allocating for
+//!   Vec<T>/String fields. A crafted payload with `[0xFF; 8]` as the first field
+//!   causes an immediate multi-exabyte allocation attempt, crashing the process.
+//!   Fix: use `DefaultOptions::with_fixint_encoding().allow_trailing_bytes().with_limit(N)`
+//!   which exactly mirrors the free-function encoding but adds an allocation cap.
+//!   Limits (PqcCredential: 4 KiB, DelegationToken: 8 KiB, DelegationChain: 32 KiB,
+//!   SignedAuditEvent: 16 KiB) are generous relative to actual sizes while blocking
+//!   the attack. See `/cso` audit Finding #4 (fingerprint `30a553fc`).
 
 use std::fmt;
 
@@ -57,6 +69,14 @@ pub const DEFAULT_VALIDITY_DAYS: i64 = 365;
 /// Algorithm tag stored in PqcCredential to identify the key type.
 /// Version 1 = Hybrid Ed25519 + ML-DSA-65.
 const CREDENTIAL_ALGO_V1: u8 = 0x01;
+
+/// Maximum byte size accepted by [`PqcCredential::from_bytes`].
+///
+/// Actual serialized size is ~2 KiB (verifying key ~1984 bytes + SPIFFE ID +
+/// timestamps + algo byte). 4 KiB provides headroom for longer SPIFFE IDs
+/// while preventing multi-exabyte allocation attacks via crafted length prefixes.
+/// See `/cso` audit Finding #4.
+pub const MAX_CREDENTIAL_BYTES: u64 = 4 * 1024;
 
 // ── SpiffeId ──────────────────────────────────────────────────────────────────
 
@@ -234,11 +254,28 @@ impl PqcCredential {
 
     /// Deserialize a credential from bytes (bincode).
     ///
+    /// Enforces a [`MAX_CREDENTIAL_BYTES`] allocation cap to prevent DoS via
+    /// crafted length-prefix fields (e.g. `[0xFF; 8]` triggering multi-exabyte
+    /// allocation). See `/cso` audit Finding #4 (fingerprint `30a553fc`).
+    ///
     /// # Errors
     ///
-    /// Returns [`Error::Serialization`] if bincode decoding fails.
+    /// Returns [`Error::Serialization`] if the input exceeds `MAX_CREDENTIAL_BYTES` or
+    /// if bincode decoding fails.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        bincode::deserialize(bytes)
+        if bytes.len() as u64 > MAX_CREDENTIAL_BYTES {
+            return Err(Error::Serialization(format!(
+                "input exceeds maximum size ({} > {})",
+                bytes.len(),
+                MAX_CREDENTIAL_BYTES
+            )));
+        }
+        use bincode::Options as _;
+        bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .allow_trailing_bytes()
+            .with_limit(MAX_CREDENTIAL_BYTES)
+            .deserialize(bytes)
             .map_err(|e| Error::Serialization(format!("credential deserialize: {e}")))
     }
 }
@@ -870,5 +907,26 @@ mod tests {
             let result = load_signing_key(&path);
             assert!(matches!(result, Err(Error::InsecureKeyPermissions)));
         });
+    }
+
+    // ── Security: allocation-DoS rejection ────────────────────────────────────
+
+    /// Feeding a payload whose first 8 bytes are 0xFF (a u64 length prefix of
+    /// ~18 exabytes) must return Err, not panic or OOM.
+    /// Regression test for /cso Finding #4 (fingerprint `30a553fc`).
+    #[test]
+    fn pqc_credential_from_bytes_rejects_oversized_length_prefix() {
+        let mut crafted = vec![0xFFu8; 8];
+        crafted.extend_from_slice(&[0u8; 16]); // some trailing bytes
+        let result = PqcCredential::from_bytes(&crafted);
+        assert!(
+            result.is_err(),
+            "oversized length prefix must be rejected, got Ok"
+        );
+        assert!(
+            matches!(result, Err(Error::Serialization(_))),
+            "expected Serialization error, got: {:?}",
+            result
+        );
     }
 }

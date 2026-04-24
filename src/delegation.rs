@@ -212,12 +212,38 @@ impl DelegationToken {
 
     /// Verify this token's signature and validity window.
     ///
-    /// Checks: not expired, not issued in the far future, PQC signature valid.
+    /// Checks: issuer/credential binding, not expired, not issued in the far
+    /// future, PQC signature valid.
     ///
     /// # Parameters
     ///
     /// - `clock_skew` — grace period (default: 30 seconds)
+    //
+    // @decision DEC-OKAMI-014
+    // @title Verify embedded credential SPIFFE ID matches claimed issuer
+    // @status accepted
+    // @rationale DelegationToken::verify uses the verifying key from the embedded
+    //   issuer_credential. Without checking that issuer_credential.spiffe_id matches
+    //   the claimed issuer, any keypair holder could forge tokens claiming any issuer
+    //   identity: they generate their own AgentIdentity, set issuer = <victim SPIFFE ID>,
+    //   embed their own credential, sign the UnsignedToken with their key, and
+    //   verify() returns Ok because the signature check only validates that the
+    //   payload was signed by the embedded key — not that the embedded key belongs
+    //   to the claimed issuer. The check is placed before time-window validation so
+    //   the error is stable regardless of system clock state.
+    //   See /cso report 2026-04-24 Finding #1
+    //   (fingerprint fc51b5488084256e84c03c389a26d5899f5424399d8d4fe99fc9e0e5ff8baeb8).
     pub fn verify(&self, clock_skew: Option<StdDuration>) -> Result<()> {
+        // Invariant: the claimed issuer must be the subject of the embedded credential.
+        // A token whose issuer field names entity X but embeds Y's verifying key is
+        // a forgery — reject before touching the clock.
+        if self.issuer != self.issuer_credential.spiffe_id {
+            return Err(Error::ChainVerificationFailed(format!(
+                "issuer {} does not match embedded credential subject {}",
+                self.issuer, self.issuer_credential.spiffe_id
+            )));
+        }
+
         let skew_secs = clock_skew
             .unwrap_or(StdDuration::from_secs(DEFAULT_CLOCK_SKEW_SECS))
             .as_secs() as i64;
@@ -870,6 +896,121 @@ mod tests {
             .unwrap();
             let chain = DelegationChain::new(vec![token]);
             assert_eq!(chain.effective_scopes().len(), 2);
+        });
+    }
+
+    // ── Security regression: issuer/credential mismatch (Finding #1) ──────────
+
+    /// An attacker with their own valid keypair forges a token claiming to be
+    /// issued by a different SPIFFE ID. The signature is cryptographically valid
+    /// (the attacker signs with their own key), but the issuer field names a
+    /// different identity than the embedded credential. verify() must reject it.
+    #[test]
+    fn delegation_token_verify_rejects_issuer_credential_mismatch() {
+        with_large_stack(|| {
+            // Attacker generates a legitimate keypair for their own identity.
+            let attacker = AgentIdentity::new("example.com", "attacker").unwrap();
+            // Victim identity the attacker wants to impersonate.
+            let victim_id = SpiffeId::new("example.com", "victim").unwrap();
+            let subject_id = SpiffeId::new("example.com", "subject").unwrap();
+
+            let scopes = vec![Capability::new("read:db").unwrap()];
+            let now = chrono::Utc::now();
+
+            // Build the UnsignedToken as the attacker would: claiming victim as issuer.
+            let unsigned = UnsignedToken {
+                issuer: victim_id.clone(),
+                subject: subject_id.clone(),
+                scopes: scopes.clone(),
+                issued_at: now,
+                expires_at: now + chrono::Duration::seconds(3600),
+                parent_token_hash: None,
+                depth: 0,
+            };
+            let payload_bytes = bincode::serialize(&unsigned).unwrap();
+
+            // Attacker signs with their own key — signature is valid for the payload.
+            let signature = attacker.sign(&payload_bytes).unwrap();
+
+            // Construct a token where issuer claims to be victim but embeds attacker's
+            // credential (whose spiffe_id == attacker, not victim).
+            let forged = DelegationToken {
+                issuer: victim_id.clone(),
+                subject: subject_id,
+                scopes,
+                issued_at: now,
+                expires_at: now + chrono::Duration::seconds(3600),
+                parent_token_hash: None,
+                depth: 0,
+                issuer_credential: attacker.credential(), // attacker's cred, not victim's
+                signature,
+            };
+
+            let result = forged.verify(None);
+            assert!(
+                matches!(result, Err(Error::ChainVerificationFailed(ref msg)) if msg.contains("does not match")),
+                "expected ChainVerificationFailed(\"does not match ...\"), got: {result:?}"
+            );
+        });
+    }
+
+    /// End-to-end chain variant: a root token with mismatched issuer/credential
+    /// must cause chain.verify() to fail at the root, even when a legitimate-
+    /// looking child token chains off it.
+    #[test]
+    fn delegation_chain_rejects_forged_root_with_mismatched_credential() {
+        with_large_stack(|| {
+            let attacker = AgentIdentity::new("example.com", "attacker").unwrap();
+            let legitimate_worker = AgentIdentity::new("example.com", "worker/1").unwrap();
+            let victim_id = SpiffeId::new("example.com", "victim").unwrap();
+            let subject_id = legitimate_worker.spiffe_id().clone();
+
+            let scopes = vec![Capability::new("read:db").unwrap()];
+            let now = chrono::Utc::now();
+
+            // Forge the root token: issuer claims victim but embeds attacker's credential.
+            let unsigned_root = UnsignedToken {
+                issuer: victim_id.clone(),
+                subject: subject_id.clone(),
+                scopes: scopes.clone(),
+                issued_at: now,
+                expires_at: now + chrono::Duration::seconds(3600),
+                parent_token_hash: None,
+                depth: 0,
+            };
+            let root_payload = bincode::serialize(&unsigned_root).unwrap();
+            let root_sig = attacker.sign(&root_payload).unwrap();
+
+            let forged_root = DelegationToken {
+                issuer: victim_id,
+                subject: subject_id,
+                scopes: scopes.clone(),
+                issued_at: now,
+                expires_at: now + chrono::Duration::seconds(3600),
+                parent_token_hash: None,
+                depth: 0,
+                issuer_credential: attacker.credential(),
+                signature: root_sig,
+            };
+
+            // Build a legitimate child token that chains off the forged root.
+            let leaf_subject = SpiffeId::new("example.com", "leaf").unwrap();
+            let child = DelegationToken::issue(
+                &legitimate_worker,
+                leaf_subject,
+                scopes.clone(),
+                &scopes,
+                StdDuration::from_secs(1800),
+                Some(&forged_root),
+            )
+            .unwrap();
+
+            let chain = DelegationChain::new(vec![forged_root, child]);
+            let result = chain.verify(None);
+            assert!(
+                matches!(result, Err(Error::ChainVerificationFailed(_))),
+                "expected ChainVerificationFailed, got: {result:?}"
+            );
         });
     }
 }

@@ -296,28 +296,43 @@ impl AgentIdentity {
         Self::generate_for(spiffe_id)
     }
 
-    /// Load an agent identity from a stored signing key.
+    /// Load an agent identity from a stored credential and signing key.
     ///
-    /// `spiffe_id_str` is parsed as a SPIFFE URI. `signing_key_bytes` must be
-    /// in the format produced by [`AgentIdentity::signing_key_bytes`].
+    /// The `credential` is taken as-is from disk, preserving its original
+    /// `created_at` / `expires_at` timestamps. The signing key is parsed and
+    /// its derived verifying key is compared against
+    /// `credential.verifying_key_bytes`; if they differ the pair is rejected
+    /// with [`Error::KeyCredentialMismatch`] to detect partial-rotation states
+    /// where `signing.key` and `credential.bin` are out of sync.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::InvalidSpiffeId`] if the SPIFFE ID is malformed, or
-    /// [`Error::Crypto`] if the signing key bytes are invalid.
-    pub fn from_stored(spiffe_id_str: &str, signing_key_bytes: &[u8]) -> Result<Self> {
-        let spiffe_id = SpiffeId::parse(spiffe_id_str)?;
+    /// Returns [`Error::Crypto`] if `signing_key_bytes` cannot be parsed, or
+    /// [`Error::KeyCredentialMismatch`] if the signing key does not correspond
+    /// to the verifying key embedded in `credential`.
+    ///
+    /// @decision DEC-OKAMI-015
+    /// @title Preserve credential timestamps in `from_stored` and bind signing key
+    /// @status accepted
+    /// @rationale CSO audit findings #2 and #3 (HIGH) showed that the previous
+    ///   implementation re-minted a fresh `PqcCredential` with `created_at =
+    ///   Utc::now()` on every load, silently resetting the validity window and
+    ///   making credential-byte-keyed revocation registries ineffective (each
+    ///   load produced distinct bytes). The fix accepts the on-disk credential
+    ///   directly, preserving its timestamps so that the loaded identity is
+    ///   byte-identical to what was originally written. A new key-binding check
+    ///   (`signing_key.verifying_key() == credential.verifying_key_bytes`) is
+    ///   added unconditionally: it is cheap, catches mismatched key/credential
+    ///   pairs that arise during partial rotations, and surfaces as the new
+    ///   `Error::KeyCredentialMismatch` variant rather than silently issuing
+    ///   tokens that embed a stale or wrong credential.
+    pub fn from_stored(credential: PqcCredential, signing_key_bytes: &[u8]) -> Result<Self> {
         let signing_key = lupine::sign::HybridSigningKey65::from_bytes(signing_key_bytes)?;
-        let verifying_key = signing_key.verifying_key();
-        let verifying_key_bytes = verifying_key.to_bytes();
-        let now = Utc::now();
-        let credential = PqcCredential {
-            spiffe_id: spiffe_id.clone(),
-            algo: CREDENTIAL_ALGO_V1,
-            verifying_key_bytes,
-            created_at: now,
-            expires_at: now + Duration::days(DEFAULT_VALIDITY_DAYS),
-        };
+        let derived_vk_bytes = signing_key.verifying_key().to_bytes();
+        if derived_vk_bytes != credential.verifying_key_bytes {
+            return Err(Error::KeyCredentialMismatch);
+        }
+        let spiffe_id = credential.spiffe_id.clone();
         Ok(AgentIdentity {
             spiffe_id,
             signing_key,
@@ -664,10 +679,10 @@ mod tests {
     fn agent_identity_from_stored_roundtrip() {
         with_large_stack(|| {
             let identity = AgentIdentity::new("example.com", "agent/roundtrip").unwrap();
-            let spiffe_str = identity.spiffe_id().to_string();
+            let credential = identity.credential();
             let key_bytes = identity.signing_key_bytes();
 
-            let identity2 = AgentIdentity::from_stored(&spiffe_str, &key_bytes).unwrap();
+            let identity2 = AgentIdentity::from_stored(credential, &key_bytes).unwrap();
             // Both identities should produce signatures verifiable by the other's credential.
             let data = b"round-trip test";
             let sig = identity2.sign(data).unwrap();
@@ -678,6 +693,78 @@ mod tests {
             assert_eq!(
                 sig1, sig2,
                 "deterministic signing: same key must produce same sig"
+            );
+        });
+    }
+
+    #[test]
+    fn from_stored_preserves_credential_timestamps() {
+        with_large_stack(|| {
+            let identity = AgentIdentity::new("example.com", "agent/ts-preserve").unwrap();
+            let credential = identity.credential();
+            let original_created_at = credential.created_at;
+            let original_expires_at = credential.expires_at;
+            let key_bytes = identity.signing_key_bytes();
+
+            // Sleep 1 ms so Utc::now() inside a naive re-mint would differ.
+            std::thread::sleep(std::time::Duration::from_millis(1));
+
+            let loaded = AgentIdentity::from_stored(credential, &key_bytes).unwrap();
+            let loaded_cred = loaded.credential();
+
+            assert_eq!(
+                loaded_cred.created_at, original_created_at,
+                "created_at must be preserved from on-disk credential, not re-minted"
+            );
+            assert_eq!(
+                loaded_cred.expires_at, original_expires_at,
+                "expires_at must be preserved from on-disk credential, not re-minted"
+            );
+        });
+    }
+
+    #[test]
+    fn from_stored_rejects_mismatched_key_and_credential() {
+        with_large_stack(|| {
+            let identity_a = AgentIdentity::new("example.com", "agent/a").unwrap();
+            let identity_b = AgentIdentity::new("example.com", "agent/b").unwrap();
+
+            // Use A's credential but B's signing key — they don't match.
+            let credential_a = identity_a.credential();
+            let key_bytes_b = identity_b.signing_key_bytes();
+
+            let result = AgentIdentity::from_stored(credential_a, &key_bytes_b);
+            assert!(
+                matches!(result, Err(Error::KeyCredentialMismatch)),
+                "mismatched key/credential must return KeyCredentialMismatch, got: {result:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn from_stored_roundtrip_with_credential_sign_verify() {
+        with_large_stack(|| {
+            // Full round-trip: generate, serialize credential + key, load back,
+            // sign + verify. Proves the loaded identity is fully functional with
+            // the preserved credential.
+            let identity = AgentIdentity::new("example.com", "agent/full-roundtrip").unwrap();
+            let credential = identity.credential();
+            let cred_bytes = credential.to_bytes().unwrap();
+            let key_bytes = identity.signing_key_bytes();
+
+            // Simulate what the CLI does: deserialize credential from bytes, load identity.
+            let restored_cred = PqcCredential::from_bytes(&cred_bytes).unwrap();
+            let loaded = AgentIdentity::from_stored(restored_cred, &key_bytes).unwrap();
+
+            let data = b"full-roundtrip payload";
+            let sig = loaded.sign(data).unwrap();
+            assert!(loaded.verify(data, &sig).unwrap(), "signature must verify");
+
+            // Verify the credential embedded in loaded tokens matches on-disk bytes.
+            let loaded_cred_bytes = loaded.credential().to_bytes().unwrap();
+            assert_eq!(
+                cred_bytes, loaded_cred_bytes,
+                "serialized credential bytes must be identical after round-trip"
             );
         });
     }

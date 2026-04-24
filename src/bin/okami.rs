@@ -220,8 +220,9 @@ fn cmd_delegate(
     let key_bytes = load_signing_key(&sk_path)?;
     let cred_bytes = std::fs::read(&cred_path)?;
     let cred = okami::identity::PqcCredential::from_bytes(&cred_bytes)?;
-    let spiffe_str = cred.spiffe_id.as_str().to_string();
-    let issuer = AgentIdentity::from_stored(&spiffe_str, &key_bytes)?;
+    // Pass the full credential through so from_stored can preserve its
+    // original timestamps and verify that the signing key matches (Finding #2/#3).
+    let issuer = AgentIdentity::from_stored(cred, &key_bytes)?;
 
     // Parse subject.
     let subject_id = SpiffeId::parse(to_spiffe)?;

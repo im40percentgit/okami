@@ -53,6 +53,15 @@ pub enum Error {
     #[error("insecure key permissions: file must be mode 0600")]
     InsecureKeyPermissions,
 
+    /// The signing key and credential files on disk refer to different keys.
+    ///
+    /// This occurs when `signing.key` and `credential.bin` were generated at
+    /// different times (e.g. a partial key rotation) and their verifying-key
+    /// bytes do not match. Loading such a pair is refused to prevent issuing
+    /// tokens whose embedded credential cannot be verified with the signing key.
+    #[error("signing key does not match credential: verifying keys differ")]
+    KeyCredentialMismatch,
+
     /// Serialization or deserialization of okami types failed.
     #[error("serialization error: {0}")]
     Serialization(String),

@@ -95,6 +95,22 @@ Side effects of the pass:
 - `Cargo.lock` is now tracked.
 - 11 new tests across the four PRs (security-specific: issuer mismatch rejection, timestamp preservation, key/credential binding, bincode bounds, oversized-input rejection, plus a 64-case proptest for from_bytes safety).
 
+## Production Readiness Backlog
+
+Items the project will need before a public 1.0 release. Not blockers for current internal/early-adopter use; tracked here so they don't fall off.
+
+| # | Item | Driver | Effort | Notes |
+|---|------|--------|--------|-------|
+| PR-1 | Publish to crates.io | maintainer must drive (irreversible) | 30 min | First publish at 0.1.0 once MASTER_PLAN intent + crate metadata are reviewed |
+| PR-2 | `cargo-fuzz` integration with targets for `DelegationChain::from_bytes`, `SpiffeId::parse`, `PqcCredential::from_bytes`, `SignedAuditEvent::from_bytes` | implementer | half day | Existing proptest is partial coverage; libfuzzer goes deeper. Requires nightly toolchain in a separate CI workflow. |
+| PR-3 | `cargo-deny` integration in CI | implementer | 1-2 hours | Wraps cargo-audit + license check + duplicate-dep check + advisory-db. Replaces / extends current `audit` job. |
+| PR-4 | Multi-OS CI matrix (macOS + Windows for the test job) | implementer | 1 hour | Catches cfg(unix) leaks; especially important for `load_signing_key` UID/permission code which has `#[cfg(unix)]` guards. Windows behavior is currently undefined. |
+| PR-5 | Doc-comment audit pass (run `cargo doc --no-deps --document-private-items`) | implementer | 2-3 hours | Confirm every public API has a `# Errors`, `# Panics` (where applicable), and at least one example block. Fix gaps. |
+| PR-6 | Tighten `RevocationStatement` verify path | implementer | 1-2 hours | Currently no public verify helper; producers can sign but consumers must reconstruct the byte order manually. Add `RevocationStatement::verify(verifying_key, &claimed_credential_bytes) -> Result<bool>`. |
+| PR-7 | Decide on Phase 2 scope (Agent Identity Platform SaaS) | maintainer | strategic | Currently gated on Phase 1 adoption per MASTER_PLAN. Adoption signal arrives → write a Phase 2 plan via `/plan-eng-review`. |
+
+Appendix items A1 + A2 from the /cso 2026-04-24 audit have closed (PR #6, commit 6e6c738). A3 (TOCTOU on permission check) is accepted residual risk.
+
 ## Phase Status
 
 | Phase | Status | Date |

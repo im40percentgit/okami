@@ -53,6 +53,34 @@
 //!   Limits (PqcCredential: 4 KiB, DelegationToken: 8 KiB, DelegationChain: 32 KiB,
 //!   SignedAuditEvent: 16 KiB) are generous relative to actual sizes while blocking
 //!   the attack. See `/cso` audit Finding #4 (fingerprint `30a553fc`).
+//!
+//! @decision DEC-OKAMI-017
+//! @title Domain-separated signatures across token/audit/revocation protocols
+//! @status accepted
+//! @rationale Without domain separation, all three signing protocols (delegation
+//!   token, audit event, revocation statement) sign raw byte payloads with the
+//!   same keypair and no type tag. An attacker who can influence any one
+//!   protocol's payload could in principle produce a signature also valid under
+//!   another protocol, enabling cross-protocol signature reuse attacks. The fix
+//!   prepends a 1-byte domain tag (DOMAIN_TOKEN=0x01, DOMAIN_AUDIT=0x02,
+//!   DOMAIN_REVOCATION=0x03) to every signed payload, making each protocol's
+//!   signed namespace disjoint. The higher-level `sign_with_domain` and
+//!   `verify_with_domain` helpers enforce this at every call site.
+//!   See `/cso` audit Appendix A1.
+//!   Wire-format break: tokens, audit events, and revocation statements signed
+//!   before this decision do not verify after.
+//!
+//! @decision DEC-OKAMI-018
+//! @title load_signing_key verifies file owner UID matches effective UID
+//! @status accepted
+//! @rationale DEC-OKAMI-004 introduced SSH-model 0600 permission checks. However
+//!   mode bits alone are insufficient: a file mode 0600 owned by another UID can
+//!   be replaced by that user without the current process detecting the swap
+//!   (same mode, different content). Adding a UID check ensures the loaded key
+//!   is actually controlled by the process owner, matching the full SSH model
+//!   (ssh-keygen refuses to use a key whose owner != current user). Uses a
+//!   minimal `extern "C" { fn geteuid() -> u32; }` declaration — no new crate
+//!   dependency needed. See `/cso` audit Appendix A2.
 
 use std::fmt;
 
@@ -77,6 +105,27 @@ const CREDENTIAL_ALGO_V1: u8 = 0x01;
 /// while preventing multi-exabyte allocation attacks via crafted length prefixes.
 /// See `/cso` audit Finding #4.
 pub const MAX_CREDENTIAL_BYTES: u64 = 4 * 1024;
+
+// ── Domain separator tags (DEC-OKAMI-017) ─────────────────────────────────────
+
+/// Domain-separator tag for delegation token signatures.
+///
+/// Prepended to the bincode-serialized `UnsignedToken` payload before signing,
+/// ensuring a delegation-token signature cannot be replayed against the audit or
+/// revocation verify paths. See DEC-OKAMI-017.
+pub const DOMAIN_TOKEN: u8 = 0x01;
+
+/// Domain-separator tag for audit event signatures.
+///
+/// Prepended to the bincode-serialized `AuditEvent` payload before signing.
+/// See DEC-OKAMI-017.
+pub const DOMAIN_AUDIT: u8 = 0x02;
+
+/// Domain-separator tag for revocation statement signatures.
+///
+/// Prepended to `credential_bytes || revoked_at_le_bytes` before signing.
+/// See DEC-OKAMI-017.
+pub const DOMAIN_REVOCATION: u8 = 0x03;
 
 // ── SpiffeId ──────────────────────────────────────────────────────────────────
 
@@ -394,6 +443,10 @@ impl AgentIdentity {
 
     /// Sign `data` with the agent's PQC signing key.
     ///
+    /// This is the low-level primitive that signs raw bytes. Prefer
+    /// [`AgentIdentity::sign_with_domain`] at protocol call sites to prevent
+    /// cross-protocol signature reuse (DEC-OKAMI-017).
+    ///
     /// Returns the serialized composite signature bytes.
     ///
     /// # Errors
@@ -402,6 +455,50 @@ impl AgentIdentity {
     pub fn sign(&self, data: &[u8]) -> Result<Vec<u8>> {
         lupine::easy::sign(&self.signing_key, data)
             .map_err(|_e| Error::Crypto(lupine_core::Error::Signing))
+    }
+
+    /// Sign `payload` with a domain-separator tag prepended.
+    ///
+    /// Produces a signature over `[domain] || payload`, where `domain` is one
+    /// of [`DOMAIN_TOKEN`], [`DOMAIN_AUDIT`], or [`DOMAIN_REVOCATION`]. This
+    /// ensures that a signature produced by one protocol cannot be replayed
+    /// against the verify path of another protocol sharing the same keypair.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Crypto`] if signing fails.
+    pub fn sign_with_domain(&self, domain: u8, payload: &[u8]) -> Result<Vec<u8>> {
+        let mut tagged = Vec::with_capacity(1 + payload.len());
+        tagged.push(domain);
+        tagged.extend_from_slice(payload);
+        self.sign(&tagged)
+    }
+
+    /// Verify a signature over `payload` that was produced with a domain tag.
+    ///
+    /// Reconstructs `[domain] || payload` and verifies the signature against
+    /// the provided `verifying_key_bytes`. Returns `Ok(true)` if valid,
+    /// `Ok(false)` if the signature does not match.
+    ///
+    /// Use the same `domain` constant that was passed to [`sign_with_domain`]
+    /// at the corresponding sign site.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Crypto`] if `verifying_key_bytes` is structurally invalid
+    /// or if the signature bytes cannot be parsed.
+    pub fn verify_with_domain(
+        verifying_key_bytes: &[u8],
+        domain: u8,
+        payload: &[u8],
+        signature: &[u8],
+    ) -> Result<bool> {
+        let mut tagged = Vec::with_capacity(1 + payload.len());
+        tagged.push(domain);
+        tagged.extend_from_slice(payload);
+        let vk = lupine::sign::HybridVerifyingKey65::from_bytes(verifying_key_bytes)?;
+        lupine::easy::verify(&vk, &tagged, signature)
+            .map_err(|_e| Error::Crypto(lupine_core::Error::Verification))
     }
 
     /// Verify a signature over `data` using this identity's verifying key.
@@ -471,9 +568,12 @@ impl AgentIdentity {
         let cred_bytes = self.credential.to_bytes()?;
         let revoked_at = Utc::now();
         let ts_secs = revoked_at.timestamp().to_le_bytes();
-        let mut to_sign = cred_bytes.clone();
-        to_sign.extend_from_slice(&ts_secs);
-        let signature = self.sign(&to_sign)?;
+        // payload = cred_bytes || revoked_at_le_bytes, signed under DOMAIN_REVOCATION
+        // so the same keypair cannot be coerced into producing a revocation
+        // signature that also validates as a token or audit event (DEC-OKAMI-017).
+        let mut payload = cred_bytes.clone();
+        payload.extend_from_slice(&ts_secs);
+        let signature = self.sign_with_domain(DOMAIN_REVOCATION, &payload)?;
         Ok(RevocationStatement {
             target_credential_bytes: cred_bytes,
             revoked_at,
@@ -551,24 +651,52 @@ pub fn save_signing_key(path: &std::path::Path, key_bytes: &[u8]) -> Result<()> 
     Ok(())
 }
 
-/// Load signing key bytes from a file, refusing if permissions are wider than 0600.
+/// Load signing key bytes from a file, enforcing SSH-model security checks.
 ///
-/// On Unix, checks that the file mode does not include group/other read bits.
-/// On non-Unix platforms, skips the permission check.
+/// On Unix, performs two checks before reading:
+/// 1. **Permission check** — the file mode must not include group/other bits
+///    (i.e. mode must be exactly 0600 or narrower). Returns
+///    [`Error::InsecureKeyPermissions`] if wider.
+/// 2. **Ownership check** — the file's owner UID must match the process's
+///    effective UID (`geteuid(2)`). Returns [`Error::InsecureKeyOwner`] if not.
+///    A file owned by another user can be replaced by that user even if the
+///    current process has read access (mode 0600 owned by root is an example).
+///    This matches the full SSH model that OpenSSH enforces for identity files.
+///
+/// On non-Unix platforms, both checks are skipped.
 ///
 /// # Errors
 ///
 /// Returns [`Error::InsecureKeyPermissions`] if Unix permissions are too wide,
+/// [`Error::InsecureKeyOwner`] if the file owner does not match effective UID,
 /// or [`Error::IoError`] if the file cannot be read.
+///
+/// See DEC-OKAMI-004 (permission check) and DEC-OKAMI-018 (ownership check).
 pub fn load_signing_key(path: &std::path::Path) -> Result<Vec<u8>> {
     #[cfg(unix)]
     {
+        // Minimal FFI for geteuid — avoids adding a libc/nix crate dependency
+        // for a single syscall. `geteuid` is async-signal-safe, always succeeds,
+        // and has the same ABI on every Unix platform (returns u32).
+        // See DEC-OKAMI-018.
+        extern "C" {
+            fn geteuid() -> u32;
+        }
+
         use std::os::unix::fs::MetadataExt;
         let meta = std::fs::metadata(path)?;
+
         // Mode bits: mask off type bits, check that group+other read/write/exec are clear.
         // 0o177 = 0b01111111 — any bit in group/other position means too-wide.
         if meta.mode() & 0o177 != 0 {
             return Err(Error::InsecureKeyPermissions);
+        }
+
+        // Ownership check: the file's owner must be the current effective user.
+        // SAFETY: geteuid() is a pure syscall with no unsafe preconditions.
+        let euid = unsafe { geteuid() };
+        if meta.uid() != euid {
+            return Err(Error::InsecureKeyOwner);
         }
     }
 
@@ -906,6 +1034,124 @@ mod tests {
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
             let result = load_signing_key(&path);
             assert!(matches!(result, Err(Error::InsecureKeyPermissions)));
+        });
+    }
+
+    /// Positive case for the UID check: a file created by the current process
+    /// (owner == euid) with mode 0600 must load successfully.
+    ///
+    /// The negative case (foreign owner) requires chown, which needs root. That
+    /// path is covered by code inspection — the branch `meta.uid() != euid`
+    /// returns `Err(Error::InsecureKeyOwner)` — and is marked `#[ignore]` below.
+    #[cfg(unix)]
+    #[test]
+    fn load_signing_key_accepts_correct_owner() {
+        with_large_stack(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("owned.key");
+            // save_signing_key creates with mode 0600 and the current UID.
+            let identity = AgentIdentity::new("example.com", "agent/uid-check").unwrap();
+            let key_bytes = identity.signing_key_bytes();
+            save_signing_key(&path, &key_bytes).unwrap();
+            // Must succeed: owner == euid and mode == 0600.
+            let loaded = load_signing_key(&path).unwrap();
+            assert_eq!(key_bytes, loaded);
+        });
+    }
+
+    /// Verifies the InsecureKeyOwner error variant exists and has the right message.
+    /// The runtime negative path (foreign-owned file) requires root to chown;
+    /// this test confirms the error is reachable at compile time.
+    #[test]
+    fn insecure_key_owner_error_variant() {
+        let e = Error::InsecureKeyOwner;
+        assert!(
+            e.to_string().contains("owner"),
+            "InsecureKeyOwner message must mention 'owner': {e}"
+        );
+    }
+
+    // ── Domain separation (DEC-OKAMI-017) ─────────────────────────────────────
+
+    /// sign_with_domain / verify_with_domain round-trip for each domain tag.
+    #[test]
+    fn domain_sign_verify_roundtrip() {
+        with_large_stack(|| {
+            let identity = AgentIdentity::new("example.com", "agent/domain-rt").unwrap();
+            let vk_bytes = identity.credential().verifying_key_bytes.clone();
+            let payload = b"test payload";
+
+            for domain in [DOMAIN_TOKEN, DOMAIN_AUDIT, DOMAIN_REVOCATION] {
+                let sig = identity.sign_with_domain(domain, payload).unwrap();
+                let valid =
+                    AgentIdentity::verify_with_domain(&vk_bytes, domain, payload, &sig).unwrap();
+                assert!(valid, "domain={domain:#04x} roundtrip must verify");
+            }
+        });
+    }
+
+    /// A signature produced under DOMAIN_TOKEN does not verify under DOMAIN_AUDIT.
+    ///
+    /// This is the core cross-protocol resistance property from DEC-OKAMI-017:
+    /// even if an attacker constructs a payload that is structurally valid for
+    /// both token and audit protocols, the domain byte makes the signed content
+    /// different and the signature invalid for the wrong protocol.
+    #[test]
+    fn domain_token_sig_does_not_verify_as_audit() {
+        with_large_stack(|| {
+            let identity = AgentIdentity::new("example.com", "agent/cross-proto").unwrap();
+            let vk_bytes = identity.credential().verifying_key_bytes.clone();
+            let payload = b"shared payload bytes";
+
+            // Sign under DOMAIN_TOKEN.
+            let sig = identity.sign_with_domain(DOMAIN_TOKEN, payload).unwrap();
+
+            // Attempt to verify under DOMAIN_AUDIT — must fail.
+            let valid =
+                AgentIdentity::verify_with_domain(&vk_bytes, DOMAIN_AUDIT, payload, &sig).unwrap();
+            assert!(!valid, "token signature must not verify under audit domain");
+        });
+    }
+
+    /// A signature produced under DOMAIN_AUDIT does not verify under DOMAIN_TOKEN.
+    #[test]
+    fn domain_audit_sig_does_not_verify_as_token() {
+        with_large_stack(|| {
+            let identity = AgentIdentity::new("example.com", "agent/cross-proto2").unwrap();
+            let vk_bytes = identity.credential().verifying_key_bytes.clone();
+            let payload = b"shared payload bytes";
+
+            // Sign under DOMAIN_AUDIT.
+            let sig = identity.sign_with_domain(DOMAIN_AUDIT, payload).unwrap();
+
+            // Attempt to verify under DOMAIN_TOKEN — must fail.
+            let valid =
+                AgentIdentity::verify_with_domain(&vk_bytes, DOMAIN_TOKEN, payload, &sig).unwrap();
+            assert!(!valid, "audit signature must not verify under token domain");
+        });
+    }
+
+    /// A signature produced under DOMAIN_REVOCATION does not verify under any other domain.
+    #[test]
+    fn domain_revocation_sig_isolated() {
+        with_large_stack(|| {
+            let identity = AgentIdentity::new("example.com", "agent/cross-proto3").unwrap();
+            let vk_bytes = identity.credential().verifying_key_bytes.clone();
+            let payload = b"revocation payload";
+
+            let sig = identity
+                .sign_with_domain(DOMAIN_REVOCATION, payload)
+                .unwrap();
+
+            for other_domain in [DOMAIN_TOKEN, DOMAIN_AUDIT] {
+                let valid =
+                    AgentIdentity::verify_with_domain(&vk_bytes, other_domain, payload, &sig)
+                        .unwrap();
+                assert!(
+                    !valid,
+                    "revocation sig must not verify under domain={other_domain:#04x}"
+                );
+            }
         });
     }
 

@@ -53,6 +53,15 @@ pub enum Error {
     #[error("insecure key permissions: file must be mode 0600")]
     InsecureKeyPermissions,
 
+    /// A key file is not owned by the current effective UID and was refused to load.
+    ///
+    /// Matches the SSH model: only the owning user should be able to possess a
+    /// signing key. A file owned by another user (even if mode 0600) could be
+    /// replaced by that user without the current process noticing.
+    /// See `/cso` audit Appendix A2 and DEC-OKAMI-018.
+    #[error("insecure key ownership: file owner does not match effective UID")]
+    InsecureKeyOwner,
+
     /// The signing key and credential files on disk refer to different keys.
     ///
     /// This occurs when `signing.key` and `credential.bin` were generated at

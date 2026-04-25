@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
-use crate::identity::{AgentIdentity, SpiffeId};
+use crate::identity::{AgentIdentity, SpiffeId, DOMAIN_AUDIT};
 
 /// Version byte for audit event format. Version 1 = current format.
 pub const AUDIT_EVENT_VERSION: u8 = 1;
@@ -113,7 +113,8 @@ impl AuditEvent {
     pub fn sign(self, identity: &AgentIdentity) -> Result<SignedAuditEvent> {
         let event_bytes = bincode::serialize(&self)
             .map_err(|e| Error::Serialization(format!("audit event serialize: {e}")))?;
-        let signature = identity.sign(&event_bytes)?;
+        // Domain tag prevents cross-protocol signature reuse (DEC-OKAMI-017).
+        let signature = identity.sign_with_domain(DOMAIN_AUDIT, &event_bytes)?;
         Ok(SignedAuditEvent {
             event: self,
             signature,
@@ -162,13 +163,18 @@ impl SignedAuditEvent {
     pub fn verify(&self, verifying_key_bytes: &[u8]) -> Result<bool> {
         let event_bytes = bincode::serialize(&self.event)
             .map_err(|e| Error::Serialization(format!("audit event serialize: {e}")))?;
-        let vk = lupine::sign::HybridVerifyingKey65::from_bytes(verifying_key_bytes)?;
-        // lupine::easy::verify returns Err for structurally malformed signature bytes,
-        // or Ok(false) for a valid structure that doesn't verify. Map Err to Ok(false)
-        // since a tampered signature is a cryptographic failure, not a format error.
-        match lupine::easy::verify(&vk, &event_bytes, &self.signature) {
+        // Verify with the domain tag that was prepended at sign time (DEC-OKAMI-017).
+        // Map structural Err to Ok(false): a malformed signature is a failed verify,
+        // not an internal error.
+        match AgentIdentity::verify_with_domain(
+            verifying_key_bytes,
+            DOMAIN_AUDIT,
+            &event_bytes,
+            &self.signature,
+        ) {
             Ok(valid) => Ok(valid),
-            Err(_) => Ok(false),
+            Err(crate::error::Error::Crypto(_)) => Ok(false),
+            Err(e) => Err(e),
         }
     }
 

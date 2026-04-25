@@ -39,7 +39,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
-use crate::identity::{AgentIdentity, PqcCredential, SpiffeId};
+use crate::identity::{AgentIdentity, PqcCredential, SpiffeId, DOMAIN_TOKEN};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -223,7 +223,8 @@ impl DelegationToken {
         let payload_bytes = bincode::serialize(&unsigned)
             .map_err(|e| Error::Serialization(format!("token payload serialize: {e}")))?;
 
-        let signature = issuer.sign(&payload_bytes)?;
+        // Domain tag prevents cross-protocol signature reuse (DEC-OKAMI-017).
+        let signature = issuer.sign_with_domain(DOMAIN_TOKEN, &payload_bytes)?;
 
         Ok(DelegationToken {
             issuer: issuer.spiffe_id().clone(),
@@ -297,12 +298,13 @@ impl DelegationToken {
         let payload_bytes = bincode::serialize(&unsigned)
             .map_err(|e| Error::Serialization(format!("token payload serialize: {e}")))?;
 
-        let vk = lupine::sign::HybridVerifyingKey65::from_bytes(
+        // Verify with the domain tag that was prepended at issue time (DEC-OKAMI-017).
+        let valid = AgentIdentity::verify_with_domain(
             &self.issuer_credential.verifying_key_bytes,
+            DOMAIN_TOKEN,
+            &payload_bytes,
+            &self.signature,
         )?;
-
-        let valid = lupine::easy::verify(&vk, &payload_bytes, &self.signature)
-            .map_err(|_| Error::Crypto(lupine_core::Error::Verification))?;
 
         if !valid {
             return Err(Error::ChainVerificationFailed(format!(

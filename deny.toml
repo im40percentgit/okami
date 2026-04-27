@@ -1,0 +1,119 @@
+# deny.toml — cargo-deny configuration for okami
+#
+# Schema reference: https://embarkstudios.github.io/cargo-deny/
+# Verified against cargo-deny v0.19 schema.
+#
+# Sections:
+#   [advisories] — RustSec advisory DB: vulnerabilities, unsound code, unmaintained crates.
+#   [licenses]   — SPDX license allowlist for the full transitive dependency tree.
+#   [bans]       — Duplicate-version detection and wildcard-version policy.
+#   [sources]    — Restrict package sources to crates.io; deny unknown registries and git sources.
+
+# ---------------------------------------------------------------------------
+# [advisories]
+# Checks the RustSec Advisory Database for known vulnerabilities, unsound
+# code, and unmaintained crates. Vulnerabilities always produce errors in
+# cargo-deny v0.18+ and cannot be downgraded (use ignore for targeted
+# exceptions with documented justification only).
+# ---------------------------------------------------------------------------
+[advisories]
+# Use the default RustSec advisory DB (https://github.com/rustsec/advisory-db).
+# db-urls defaults to this; no override needed.
+
+# unmaintained = "all": any crate with an unmaintained advisory errors,
+# whether direct or transitive. Direct deps that are knowingly unmaintained
+# but safe are listed in the ignore block below with rationale.
+unmaintained = "all"
+
+# unsound = "all": any crate with an unsoundness advisory errors.
+unsound = "all"
+
+# Targeted exceptions — each entry MUST have a documented reason.
+ignore = [
+    # RUSTSEC-2025-0141: bincode 1.x — the bincode maintainer team disbanded
+    # due to a harassment incident and declared v1.3.3 a "complete, final"
+    # release. No security vulnerability exists; the crate is feature-frozen,
+    # not broken. Okami uses bincode only for internal serialization with
+    # allocation bounds (PR #4 added a deserialization cap). Upgrading to an
+    # alternative (postcard, bitcode) is tracked as a separate maintenance
+    # item. Safe to suppress here.
+    { id = "RUSTSEC-2025-0141", reason = "bincode 1.3.3 is feature-frozen but not broken; okami applies allocation caps (PR #4). Migration to a maintained alternative is a separate task." },
+]
+
+# ---------------------------------------------------------------------------
+# [licenses]
+# Every crate in the transitive dependency tree must have a license that
+# satisfies at least one SPDX identifier in the allow list. The list below
+# was derived by running `cargo deny check licenses` against the actual
+# Cargo.lock and adding every identifier that appeared in an OR expression
+# where at least one alternative is OSI-approved and permissive.
+#
+# Notably absent:
+#   LGPL-2.1-or-later — appears only in `r-efi` as a third OR option
+#     alongside MIT and Apache-2.0; cargo-deny resolves the OR by finding
+#     MIT/Apache-2.0 first. No LGPL crate is being linked.
+#   GPL-* — not present anywhere in the dep tree.
+# ---------------------------------------------------------------------------
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",  # rustc/LLVM-derived crates (e.g. wasi)
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",    # unicode-ident — "(MIT OR Apache-2.0) AND Unicode-3.0"
+    "CC0-1.0",
+    "Zlib",
+    "MPL-2.0",
+    "0BSD",
+    "BSL-1.0",
+    "Unlicense",      # memchr — "Unlicense OR MIT"; both are in the allowlist
+]
+
+# Require 93% license-text confidence to avoid misidentification.
+# Stricter than the 0.8 default; appropriate for a security-focused crate.
+confidence-threshold = 0.93
+
+# ---------------------------------------------------------------------------
+# [bans]
+# Warns on duplicate transitive versions (noise signal for future dep
+# consolidation), and hard-denies wildcard version constraints.
+#
+# Duplicate versions in this project come from the PQC dep tree (lupine uses
+# newer digest/sha2/sha3 than the stable ecosystem), which is unavoidable
+# without upstream version alignment. `multiple-versions = "warn"` flags
+# them without blocking PRs.
+# ---------------------------------------------------------------------------
+[bans]
+# Warn on duplicate crate versions in the dep tree — doesn't block PRs but
+# surfaces consolidation opportunities.
+multiple-versions = "warn"
+
+# Deny `version = "*"` in any Cargo.toml in the workspace.
+wildcards = "deny"
+
+# No crates are unconditionally banned yet.
+deny = []
+
+# No skip entries — the duplicate-version warnings from lupine's PQC dep
+# tree are transient (expected to resolve as the ecosystem converges on
+# newer digest/sha2/sha3 versions). No skip needed as these are warnings,
+# not errors.
+skip = []
+
+# ---------------------------------------------------------------------------
+# [sources]
+# Restrict package origin to crates.io. Any crate pulled from an unknown
+# registry or an unlisted git source fails the check.
+# ---------------------------------------------------------------------------
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+
+# Only crates.io is an allowed registry.
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+# No git sources — all dependencies are published crates.
+allow-git = []

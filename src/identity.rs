@@ -81,6 +81,22 @@
 //!   (ssh-keygen refuses to use a key whose owner != current user). Uses a
 //!   minimal `extern "C" { fn geteuid() -> u32; }` declaration — no new crate
 //!   dependency needed. See `/cso` audit Appendix A2.
+//!
+//! @decision DEC-OKAMI-019
+//! @title Public RevocationStatement::verify helper
+//! @status accepted
+//! @rationale DEC-OKAMI-017 introduced domain-separated signatures and
+//!   `verify_with_domain`, but `RevocationStatement` shipped without a
+//!   first-party verify path. Consumers building offline revocation lists had
+//!   to hand-reconstruct the byte order (`target_credential_bytes ||
+//!   revoked_at_secs.to_le_bytes()`) and remember to pass `DOMAIN_REVOCATION`.
+//!   That's a footgun: getting the byte order or domain tag wrong silently
+//!   either accepts forged revocations or rejects valid ones. This helper
+//!   takes `verifying_key_bytes` and `claimed_credential_bytes`, reconstructs
+//!   the payload internally, calls `AgentIdentity::verify_with_domain`, and
+//!   returns `Ok(false)` for any verification failure (including mismatched
+//!   claimed bytes). Mirrors the ergonomics of `DelegationToken::verify` and
+//!   `SignedAuditEvent::verify`.
 
 use std::fmt;
 
@@ -344,6 +360,51 @@ pub struct RevocationStatement {
     pub revoked_at: DateTime<Utc>,
     /// PQC signature over `target_credential_bytes || revoked_at_timestamp_secs`.
     pub signature: Vec<u8>,
+}
+
+impl RevocationStatement {
+    /// Verify this revocation statement was signed by the holder of
+    /// `verifying_key_bytes` for `claimed_credential_bytes`.
+    ///
+    /// Returns `Ok(true)` if and only if:
+    ///   1. `claimed_credential_bytes` exactly matches `self.target_credential_bytes`, AND
+    ///   2. The signature is valid under the given verifying key with `DOMAIN_REVOCATION`.
+    ///
+    /// Returns `Ok(false)` for any verification failure (wrong key, tampered
+    /// payload, mismatched claimed bytes, cross-protocol signature reuse).
+    /// Returns `Err` only for genuine cryptographic / decoding errors that
+    /// prevent verification from running at all.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Crypto`] if the verifying key bytes are malformed.
+    pub fn verify(
+        &self,
+        verifying_key_bytes: &[u8],
+        claimed_credential_bytes: &[u8],
+    ) -> Result<bool> {
+        // Guard: caller must supply the same credential bytes this statement covers.
+        // Return Ok(false) — not Err — so that all "this statement does not revoke
+        // that credential" outcomes look identical to the caller.
+        if claimed_credential_bytes != self.target_credential_bytes.as_slice() {
+            return Ok(false);
+        }
+
+        // Reconstruct the signed payload exactly as AgentIdentity::revoke does:
+        //   payload = target_credential_bytes || revoked_at.timestamp().to_le_bytes()
+        let ts_secs = self.revoked_at.timestamp().to_le_bytes();
+        let mut payload = self.target_credential_bytes.clone();
+        payload.extend_from_slice(&ts_secs);
+
+        // Delegate to verify_with_domain; it prepends DOMAIN_REVOCATION before
+        // calling the underlying PQC verifier (DEC-OKAMI-017).
+        AgentIdentity::verify_with_domain(
+            verifying_key_bytes,
+            DOMAIN_REVOCATION,
+            &payload,
+            &self.signature,
+        )
+    }
 }
 
 // ── AgentIdentity ─────────────────────────────────────────────────────────────
@@ -1152,6 +1213,129 @@ mod tests {
                     "revocation sig must not verify under domain={other_domain:#04x}"
                 );
             }
+        });
+    }
+
+    // ── RevocationStatement::verify ───────────────────────────────────────────
+
+    /// Round-trip: identity revokes itself, then verify with own verifying key
+    /// and own credential bytes returns Ok(true).
+    #[test]
+    fn revocation_verify_round_trip() {
+        with_large_stack(|| {
+            let identity = AgentIdentity::new("example.com", "agent/revoke-rt").unwrap();
+            let cred_bytes = identity.credential().to_bytes().unwrap();
+            let vk_bytes = identity.credential().verifying_key_bytes.clone();
+
+            let stmt = identity.revoke().unwrap();
+
+            let result = stmt.verify(&vk_bytes, &cred_bytes).unwrap();
+            assert!(
+                result,
+                "verify should return true for a valid revocation statement"
+            );
+        });
+    }
+
+    /// Wrong key: identity A revokes itself; identity B's verifying key cannot
+    /// verify A's revocation statement.
+    #[test]
+    fn revocation_verify_wrong_key() {
+        with_large_stack(|| {
+            let identity_a = AgentIdentity::new("example.com", "agent/revoke-a").unwrap();
+            let identity_b = AgentIdentity::new("example.com", "agent/revoke-b").unwrap();
+
+            let cred_a_bytes = identity_a.credential().to_bytes().unwrap();
+            let vk_b_bytes = identity_b.credential().verifying_key_bytes.clone();
+
+            let stmt = identity_a.revoke().unwrap();
+
+            let result = stmt.verify(&vk_b_bytes, &cred_a_bytes).unwrap();
+            assert!(
+                !result,
+                "verify should return false when the wrong key is used"
+            );
+        });
+    }
+
+    /// Tampered target bytes: mutating one byte of target_credential_bytes in the
+    /// statement causes the signature check to fail.
+    #[test]
+    fn revocation_verify_tampered_target_bytes() {
+        with_large_stack(|| {
+            let identity = AgentIdentity::new("example.com", "agent/revoke-tamper").unwrap();
+            let cred_bytes = identity.credential().to_bytes().unwrap();
+            let vk_bytes = identity.credential().verifying_key_bytes.clone();
+
+            let mut stmt = identity.revoke().unwrap();
+            // Flip one bit in the statement's stored credential bytes.
+            stmt.target_credential_bytes[0] ^= 0x01;
+
+            // Pass the original credential bytes as the claim — the payload
+            // reconstructed internally will be wrong, so the signature won't match.
+            let result = stmt.verify(&vk_bytes, &cred_bytes).unwrap();
+            assert!(
+                !result,
+                "verify should return false when target_credential_bytes are tampered"
+            );
+        });
+    }
+
+    /// Mismatched claimed bytes: the caller passes bytes that do not match
+    /// self.target_credential_bytes — verify returns Ok(false) immediately,
+    /// before even attempting the signature check.
+    #[test]
+    fn revocation_verify_wrong_claimed_bytes() {
+        with_large_stack(|| {
+            let identity = AgentIdentity::new("example.com", "agent/revoke-mismatch").unwrap();
+            let vk_bytes = identity.credential().verifying_key_bytes.clone();
+
+            let stmt = identity.revoke().unwrap();
+
+            // Pass deliberately wrong credential bytes.
+            let wrong_bytes = b"this is not the right credential bytes";
+            let result = stmt.verify(&vk_bytes, wrong_bytes).unwrap();
+            assert!(
+                !result,
+                "verify should return false when claimed_credential_bytes do not match"
+            );
+        });
+    }
+
+    /// Cross-protocol signature rejection: sign the same payload under DOMAIN_TOKEN
+    /// and splice that signature into a RevocationStatement — verify must return
+    /// Ok(false), proving DEC-OKAMI-017 domain separation holds at this API layer.
+    #[test]
+    fn revocation_verify_cross_protocol_signature_rejected() {
+        with_large_stack(|| {
+            let identity = AgentIdentity::new("example.com", "agent/revoke-xproto").unwrap();
+            let vk_bytes = identity.credential().verifying_key_bytes.clone();
+
+            // Build a statement, then steal its target bytes and timestamp to
+            // construct the same payload the revoke() method would sign.
+            let stmt = identity.revoke().unwrap();
+            let ts_secs = stmt.revoked_at.timestamp().to_le_bytes();
+            let mut token_payload = stmt.target_credential_bytes.clone();
+            token_payload.extend_from_slice(&ts_secs);
+
+            // Sign that identical payload under DOMAIN_TOKEN instead of DOMAIN_REVOCATION.
+            let cross_sig = identity
+                .sign_with_domain(DOMAIN_TOKEN, &token_payload)
+                .unwrap();
+
+            // Splice the cross-domain signature into the statement.
+            let tampered = RevocationStatement {
+                target_credential_bytes: stmt.target_credential_bytes.clone(),
+                revoked_at: stmt.revoked_at,
+                signature: cross_sig,
+            };
+
+            let cred_bytes = stmt.target_credential_bytes.clone();
+            let result = tampered.verify(&vk_bytes, &cred_bytes).unwrap();
+            assert!(
+                !result,
+                "verify must return false for a cross-protocol (DOMAIN_TOKEN) signature"
+            );
         });
     }
 

@@ -138,7 +138,9 @@ Appendix items A1 + A2 from the /cso 2026-04-24 audit have closed (PR #6, commit
 | DEC-OKAMI-014 | DelegationToken::verify rejects mismatched issuer/embedded-credential SPIFFE ID | Without this binding check the embedded credential can be from a different identity than the claimed issuer; allows full bypass of self-contained verification | `src/delegation.rs` |
 | DEC-OKAMI-015 | AgentIdentity::from_stored takes a PqcCredential and verifies key/credential pairing | Re-minting timestamps on every load made expiry illusory and broke revocation-by-bytes; the binding check catches mismatched signing.key/credential.bin pairs | `src/identity.rs` |
 | DEC-OKAMI-016 | Bounded bincode deserialization with per-type input-size caps + `with_limit` | Bincode 1.x has no default allocation cap; a crafted 8-byte length prefix triggers exabyte allocation; well-formed oversized inputs deserve rejection too | `src/delegation.rs`, `src/identity.rs`, `src/audit.rs` |
+| DEC-OKAMI-017 | Domain-separated signatures across token / audit / revocation protocols (1-byte domain tag prepended before signing) | Without domain separation a signature crafted in one protocol could verify against another, enabling cross-protocol signature reuse. Wire-format break from pre-0.1.1 signatures. /cso Appendix A1. | `src/identity.rs`, `src/delegation.rs`, `src/audit.rs` |
+| DEC-OKAMI-018 | `load_signing_key` verifies file owner UID matches effective UID via libc `geteuid()` | Mode-0600 alone is insufficient — a key file owned by another UID can be silently replaced by that user. UID check matches full SSH model (ssh-keygen refuses non-owner keys). No new crate dep. /cso Appendix A2. | `src/identity.rs` |
 
 ## Review Status
 
-CEO + ENG CLEARED. Phase 1 complete. 16 decisions documented. Security hardening pass (/cso 2026-04-24) merged across PRs #1-#4.
+CEO + ENG CLEARED. Phase 1 complete. 18 decisions documented. Security hardening pass (/cso 2026-04-24) merged across PRs #1-#6.

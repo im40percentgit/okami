@@ -46,18 +46,18 @@ jobs:
       - name: Tests
         run: cargo test --all
 
-  audit:
-    name: Security Audit
+  deny:
+    name: Supply-Chain Audit (cargo-deny)
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      checks: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
-      - name: cargo audit
-        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998  # v2.0.0
+      - name: cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@91bf2b620e09e18d6eb78b92e7861937469acedb  # v2.0.17
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          command: check advisories licenses bans sources
+          rust-version: "1.85"

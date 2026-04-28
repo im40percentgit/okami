@@ -101,7 +101,7 @@ Items the project will need before a public 1.0 release. Not blockers for curren
 
 | # | Item | Driver | Effort | Notes |
 |---|------|--------|--------|-------|
-| PR-1 | Publish to crates.io | maintainer must drive (irreversible) | 30 min | First publish at 0.1.0 once MASTER_PLAN intent + crate metadata are reviewed |
+| ~~PR-1~~ | ~~Publish to crates.io~~ | ~~maintainer~~ | ~~30 min~~ | ~~Closed: published as 0.2.0 on 2026-04-27, tag v0.2.0~~ |
 | PR-2 | `cargo-fuzz` integration with targets for `DelegationChain::from_bytes`, `SpiffeId::parse`, `PqcCredential::from_bytes`, `SignedAuditEvent::from_bytes` | implementer | half day | Existing proptest is partial coverage; libfuzzer goes deeper. Requires nightly toolchain in a separate CI workflow. |
 | PR-3 | `cargo-deny` integration in CI | implementer | 1-2 hours | Wraps cargo-audit + license check + duplicate-dep check + advisory-db. Replaces / extends current `audit` job. |
 | PR-4 | Multi-OS CI matrix (macOS + Windows for the test job) | implementer | 1 hour | Catches cfg(unix) leaks; especially important for `load_signing_key` UID/permission code which has `#[cfg(unix)]` guards. Windows behavior is currently undefined. |
@@ -116,6 +116,7 @@ Appendix items A1 + A2 from the /cso 2026-04-24 audit have closed (PR #6, commit
 | Phase | Status | Date |
 |-------|--------|------|
 | Phase 1 — Agent Passport SDK | **completed** | 2026-03-25 |
+| Phase 1 — Published to crates.io (v0.2.0) | **completed** | 2026-04-27 |
 | Phase 2 — Agent Identity Platform | planned (gated on Phase 1 adoption) | — |
 
 ## Decision Log
@@ -146,4 +147,4 @@ Appendix items A1 + A2 from the /cso 2026-04-24 audit have closed (PR #6, commit
 
 ## Review Status
 
-CEO + ENG CLEARED. Phase 1 complete. 21 decisions documented. Security hardening pass (/cso 2026-04-24) merged across PRs #1-#6.
+CEO + ENG CLEARED. Phase 1 complete. 21 decisions documented. Security hardening pass (/cso 2026-04-24) merged across PRs #1-#6. Published as okami 0.2.0 on crates.io (2026-04-27).

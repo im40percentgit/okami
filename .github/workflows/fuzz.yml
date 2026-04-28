@@ -1,0 +1,57 @@
+name: Fuzz
+
+on:
+  schedule:
+    - cron: "27 6 * * *"   # daily, ~06:27 UTC (offset to avoid the cron rush)
+  workflow_dispatch: {}    # allow manual trigger
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  fuzz:
+    name: Fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - delegation_chain_from_bytes
+          - spiffe_id_parse
+          - pqc_credential_from_bytes
+          - signed_audit_event_from_bytes
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install nightly Rust
+        run: |
+          rustup toolchain install nightly --profile minimal --component rust-src
+
+      - name: Install cargo-fuzz
+        run: cargo +nightly install --locked cargo-fuzz
+
+      - name: Cache fuzz target
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            fuzz/target/
+          key: ${{ runner.os }}-nightly-fuzz-${{ matrix.target }}-${{ hashFiles('Cargo.lock', 'fuzz/Cargo.toml') }}
+
+      - name: Run fuzz target (60s)
+        run: |
+          cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=60 -timeout=10 -rss_limit_mb=2048
+
+      - name: Upload crash artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore
+          retention-days: 14

@@ -55,6 +55,23 @@
 //!   The companion lint `#![deny(rustdoc::broken_intra_doc_links)]` makes
 //!   ambiguous or stale doc references a build error too — without it, the
 //!   only signal would be a `cargo doc` warning easy to overlook.
+//!
+//! @decision DEC-OKAMI-022
+//! @title cargo-fuzz integration with libFuzzer targets for byte-deserialization
+//!   entry points
+//! @status accepted
+//! @rationale DEC-OKAMI-012 (proptest) gives partial property-based coverage of
+//!   the four `from_bytes` / `parse` paths. proptest generates random shapes
+//!   from a strategy; libFuzzer is corpus-guided and explores edge cases via
+//!   coverage feedback — the two are complementary. Targets cover
+//!   `DelegationChain::from_bytes`, `SpiffeId::parse`,
+//!   `PqcCredential::from_bytes`, and `SignedAuditEvent::from_bytes`. The
+//!   contract is "must never panic on arbitrary input"; returning `Err` for
+//!   malformed bytes is correct, as is `Ok` for well-formed but adversarial
+//!   inputs (DEC-OKAMI-016 allocation caps must hold). Runs nightly via a
+//!   separate `Fuzz` workflow on the nightly toolchain — too slow for PR-time
+//!   gating but cheap on cron. Crash artifacts upload automatically on
+//!   failure for triage.
 
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]

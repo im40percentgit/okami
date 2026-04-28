@@ -1,0 +1,22 @@
+# Windows-only: bump the default linker /STACK reservation from 1 MiB to 32 MiB.
+#
+# Hybrid Ed25519+ML-DSA-65 keygen materializes large temporaries that exceed
+# the Windows default main-thread stack of 1 MiB. The unit + property tests
+# work around this with a `with_large_stack` helper, and the okami CLI binary
+# spawns a 32 MiB worker thread (see `src/bin/okami.rs`). For ordinary cargo
+# builds and `cargo test --tests`, this linker setting is the cleanest fix:
+# every produced binary starts with a 32 MiB main-thread stack so library
+# users on Windows do not need to know about the workaround.
+#
+# Doctests are compiled by rustdoc, which does NOT pick up `rustflags` here
+# nor a `rustdocflags` entry under `[target.cfg]` (only `[build].rustdocflags`
+# and the `RUSTDOCFLAGS` env var are honored). The CI workflow sets
+# `RUSTDOCFLAGS=-C link-arg=/STACK:33554432` for the Windows job.
+#
+# Linux and macOS main threads default to 8 MiB, which is already sufficient.
+
+[target.'cfg(all(target_os = "windows", target_env = "msvc"))']
+rustflags = ["-C", "link-arg=/STACK:33554432"]
+
+[target.'cfg(all(target_os = "windows", target_env = "gnu"))']
+rustflags = ["-C", "link-arg=-Wl,--stack,33554432"]

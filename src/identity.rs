@@ -99,19 +99,25 @@
 //!   `SignedAuditEvent::verify`.
 //!
 //! @decision DEC-OKAMI-021
-//! @title Windows is supported for build + non-unix-specific tests; key-file
+//! @title Windows is fully supported (build + tests + doctests); key-file
 //!   protection (DEC-OKAMI-004 0600 perms, DEC-OKAMI-018 UID check) remains
 //!   unix-only
 //! @status accepted
-//! @rationale CI matrix now includes windows-latest so the crate compiles and
-//!   most tests pass there. The `load_signing_key` permission/owner checks are
-//!   guarded by `#[cfg(unix)]` because the unix file-mode and UID model has no
-//!   direct NTFS analogue — implementing equivalent ACL-based protection on
-//!   Windows is its own design problem and not in scope for 0.1.0. On Windows,
+//! @rationale CI matrix now includes windows-latest and the full `cargo test
+//!   --all` suite (unit + integration + property + doctests) is green there.
+//!   The `load_signing_key` permission/owner checks are guarded by
+//!   `#[cfg(unix)]` because the unix file-mode and UID model has no direct
+//!   NTFS analogue — implementing equivalent ACL-based protection on Windows
+//!   is its own design problem and not in scope for 0.1.0. On Windows,
 //!   `load_signing_key` simply skips those checks, which means a Windows-side
 //!   user is responsible for protecting their `signing.key` via ordinary file
 //!   ACLs. This trade is documented at the API layer; the multi-OS matrix
 //!   surfaces any regression in the cross-platform paths automatically.
+//!   Hybrid PQC keygen exceeds the Windows default 1 MiB main-thread stack;
+//!   `.cargo/config.toml` bumps the linker `/STACK` reservation to 32 MiB for
+//!   Windows targets, the okami CLI binary spawns its work on a 32 MiB worker
+//!   thread for portability, and CI sets `RUSTDOCFLAGS=-C link-arg=/STACK:...`
+//!   on the Windows job because rustdoc does not honor `target.cfg` rustflags.
 
 use std::fmt;
 

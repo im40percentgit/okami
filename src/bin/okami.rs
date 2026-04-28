@@ -313,10 +313,20 @@ fn cmd_tree(chain_path: &std::path::Path) -> anyhow::Result<()> {
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-fn main() {
+/// Stack size for the CLI worker thread.
+///
+/// Hybrid Ed25519+ML-DSA-65 keygen materializes large temporaries that exceed
+/// the Windows main-thread default (1 MiB). The unit + property tests work
+/// around this with a `with_large_stack(32 MiB)` helper; the CLI binary uses
+/// the same budget so commands like `init` and `keygen` succeed on Windows.
+/// Linux/macOS main threads default to 8 MiB which is also fine, but doing
+/// this unconditionally keeps behavior identical across platforms.
+const CLI_STACK_SIZE: usize = 32 * 1024 * 1024;
+
+fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    let result: anyhow::Result<()> = match &cli.command {
+    match &cli.command {
         Commands::Init { trust_domain } => cmd_init(trust_domain),
         Commands::Keygen {
             trust_domain,
@@ -341,6 +351,21 @@ fn main() {
         ),
         Commands::VerifyChain { chain } => cmd_verify_chain(chain),
         Commands::Tree { chain } => cmd_tree(chain),
+    }
+}
+
+fn main() {
+    let handle = std::thread::Builder::new()
+        .stack_size(CLI_STACK_SIZE)
+        .spawn(run)
+        .expect("failed to spawn CLI worker thread");
+
+    let result = match handle.join() {
+        Ok(r) => r,
+        Err(_) => {
+            eprintln!("error: CLI worker thread panicked");
+            std::process::exit(1);
+        }
     };
 
     if let Err(e) = result {

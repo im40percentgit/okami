@@ -49,6 +49,12 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Tests
+        env:
+          # Bump the doctest binary's main-thread stack on Windows. Hybrid PQC
+          # keygen exceeds the 1 MiB Windows default; .cargo/config.toml covers
+          # cargo build + `cargo test --tests`, but rustdoc does not honor those
+          # rustflags, so doctests need the env override. Empty on linux/macos.
+          RUSTDOCFLAGS: ${{ matrix.os == 'windows-latest' && '-C link-arg=/STACK:33554432' || '' }}
         run: cargo test --all
 
   deny:

@@ -1,6 +1,6 @@
 [package]
 name = "okami"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Post-quantum cryptographic identity for AI agents"
@@ -9,6 +9,14 @@ repository = "https://github.com/im40percentgit/okami"
 homepage = "https://github.com/im40percentgit/okami"
 keywords = ["post-quantum", "cryptography", "identity", "agent", "spiffe"]
 categories = ["cryptography", "authentication"]
+exclude = [
+    ".claude/",
+    ".github/",
+    ".gstack/",
+    "tmp/",
+    "MASTER_PLAN.md",
+    "DECISIONS.md",
+]
 
 [[bin]]
 name = "okami"

@@ -1,0 +1,54 @@
+[package]
+name = "okami-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# cargo-fuzz creates a standalone workspace so it doesn't unify features with
+# the parent crate. Without this, feature resolution can activate a problematic
+# pkcs8 path on `ml-dsa-rc.7` that fails on current nightly.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+# Pin pkcs8 to the rc version that ml-dsa-rc.7 and slh-dsa-rc.4 were written
+# against. pkcs8 0.11.0 stable changed KeyMalformed from a variant to a
+# function, which breaks compilation of those crates. An explicit version
+# requirement here forces the resolver to use the rc — cargo's minimal version
+# rules will still satisfy any dep requiring >= rc.10. Remove this pin when
+# ml-dsa / slh-dsa ship releases targeting pkcs8 0.11.0 stable.
+pkcs8 = "=0.11.0-rc.11"
+
+[dependencies.okami]
+path = ".."
+
+[[bin]]
+name = "delegation_chain_from_bytes"
+path = "fuzz_targets/delegation_chain_from_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "spiffe_id_parse"
+path = "fuzz_targets/spiffe_id_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pqc_credential_from_bytes"
+path = "fuzz_targets/pqc_credential_from_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "signed_audit_event_from_bytes"
+path = "fuzz_targets/signed_audit_event_from_bytes.rs"
+test = false
+doc = false
+bench = false

@@ -97,6 +97,21 @@
 //!   returns `Ok(false)` for any verification failure (including mismatched
 //!   claimed bytes). Mirrors the ergonomics of `DelegationToken::verify` and
 //!   `SignedAuditEvent::verify`.
+//!
+//! @decision DEC-OKAMI-021
+//! @title Windows is supported for build + non-unix-specific tests; key-file
+//!   protection (DEC-OKAMI-004 0600 perms, DEC-OKAMI-018 UID check) remains
+//!   unix-only
+//! @status accepted
+//! @rationale CI matrix now includes windows-latest so the crate compiles and
+//!   most tests pass there. The `load_signing_key` permission/owner checks are
+//!   guarded by `#[cfg(unix)]` because the unix file-mode and UID model has no
+//!   direct NTFS analogue — implementing equivalent ACL-based protection on
+//!   Windows is its own design problem and not in scope for 0.1.0. On Windows,
+//!   `load_signing_key` simply skips those checks, which means a Windows-side
+//!   user is responsible for protecting their `signing.key` via ordinary file
+//!   ACLs. This trade is documented at the API layer; the multi-OS matrix
+//!   surfaces any regression in the cross-platform paths automatically.
 
 use std::fmt;
 

@@ -142,7 +142,8 @@ Appendix items A1 + A2 from the /cso 2026-04-24 audit have closed (PR #6, commit
 | DEC-OKAMI-018 | `load_signing_key` verifies file owner UID matches effective UID via libc `geteuid()` | Mode-0600 alone is insufficient — a key file owned by another UID can be silently replaced by that user. UID check matches full SSH model (ssh-keygen refuses non-owner keys). No new crate dep. /cso Appendix A2. | `src/identity.rs` |
 | DEC-OKAMI-019 | Public `RevocationStatement::verify(verifying_key_bytes, claimed_credential_bytes)` helper | Hand-reconstructing the signed payload (`target_bytes || revoked_at_secs.to_le_bytes()` under `DOMAIN_REVOCATION`) is a footgun that silently accepts forged revocations or rejects valid ones; first-party helper mirrors `DelegationToken::verify` and `SignedAuditEvent::verify` ergonomics. | `src/identity.rs` |
 | DEC-OKAMI-020 | `#![deny(missing_docs)]` at crate root + `# Errors` on every Result-returning public function + `# Examples` on flagship public types | Once published to crates.io every `pub` item is a stable contract; compile-time enforcement prevents API surface drifting away from documentation. | `src/lib.rs` |
+| DEC-OKAMI-021 | Multi-OS CI matrix (Ubuntu + macOS + Windows); key-file protection (DEC-004 + DEC-018) is `cfg(unix)`-only and explicitly out-of-scope for Windows in 0.1.0 | Compile + non-unix tests should run cross-platform; ACL-based protection equivalents on Windows are a separate design problem; documenting the explicit gap prevents silent regression. | `src/identity.rs`, `.github/workflows/ci.yml` |
 
 ## Review Status
 
-CEO + ENG CLEARED. Phase 1 complete. 20 decisions documented. Security hardening pass (/cso 2026-04-24) merged across PRs #1-#6.
+CEO + ENG CLEARED. Phase 1 complete. 21 decisions documented. Security hardening pass (/cso 2026-04-24) merged across PRs #1-#6.

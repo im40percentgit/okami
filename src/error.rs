@@ -1,6 +1,6 @@
 //! Unified error type for the okami Agent Passport SDK.
 //!
-//! All okami operations surface errors through the single [`Error`] enum.
+//! All okami operations surface errors through the single [`enum@Error`] enum.
 //! This keeps the API simple: callers import one type and match on
 //! meaningful variants without nested conversion chains.
 //!

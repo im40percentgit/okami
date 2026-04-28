@@ -76,6 +76,8 @@ pub struct Capability(String);
 impl Capability {
     /// Parse and validate a capability scope string.
     ///
+    /// # Errors
+    ///
     /// Returns [`Error::InvalidScope`] if the string is empty or contains whitespace.
     pub fn new(scope: &str) -> Result<Self> {
         if scope.is_empty() {
@@ -132,6 +134,39 @@ struct UnsignedToken {
 ///
 /// Contains: issuer SPIFFE ID, subject SPIFFE ID, scopes, validity window,
 /// parent chain linkage, embedded issuer credential, and PQC signature.
+///
+/// # Examples
+///
+/// ```
+/// use okami::identity::{AgentIdentity, SpiffeId};
+/// use okami::delegation::{Capability, DelegationToken};
+/// use std::time::Duration;
+///
+/// let issuer = AgentIdentity::new("example.com", "orchestrator").unwrap();
+/// let subject = SpiffeId::new("example.com", "worker/1").unwrap();
+/// let scopes = vec![Capability::new("read:db").unwrap()];
+///
+/// // Issue a root token (no parent).
+/// let token = DelegationToken::issue(
+///     &issuer,
+///     subject,
+///     scopes.clone(),
+///     &scopes,
+///     Duration::from_secs(3600),
+///     None,
+/// ).unwrap();
+///
+/// assert_eq!(token.depth, 0);
+/// assert!(token.parent_token_hash.is_none());
+///
+/// // Verify signature and validity window.
+/// token.verify(None).unwrap();
+///
+/// // Round-trip through bytes (e.g. for network transport).
+/// let bytes = token.to_bytes().unwrap();
+/// let token2 = DelegationToken::from_bytes(&bytes).unwrap();
+/// token2.verify(None).unwrap();
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DelegationToken {
     /// Issuer SPIFFE ID.
@@ -246,7 +281,16 @@ impl DelegationToken {
     ///
     /// # Parameters
     ///
-    /// - `clock_skew` — grace period (default: 30 seconds)
+    /// - `clock_skew` — grace period (default: [`DEFAULT_CLOCK_SKEW_SECS`] seconds)
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::ChainVerificationFailed`] if the claimed issuer does not match the
+    ///   embedded credential's SPIFFE ID, or if the PQC signature is invalid
+    /// - [`Error::TokenExpired`] if the token's validity window has passed
+    /// - [`Error::TokenNotYetValid`] if the token's `issued_at` is too far in the future
+    /// - [`Error::Serialization`] if the unsigned payload cannot be re-serialized
+    /// - [`Error::Crypto`] if the verifying key in the embedded credential is structurally invalid
     //
     // @decision DEC-OKAMI-014
     // @title Verify embedded credential SPIFFE ID matches claimed issuer
@@ -317,6 +361,10 @@ impl DelegationToken {
     }
 
     /// Serialize this token to bytes (bincode).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Serialization`] if bincode encoding fails.
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
         bincode::serialize(self).map_err(|e| Error::Serialization(format!("token serialize: {e}")))
     }
@@ -348,6 +396,10 @@ impl DelegationToken {
     }
 
     /// Return a SHA-256 hash of this token's serialized bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Serialization`] if bincode encoding fails.
     pub fn hash(&self) -> Result<[u8; 32]> {
         let bytes = self.to_bytes()?;
         Ok(Sha256::digest(&bytes).into())
@@ -361,6 +413,46 @@ impl DelegationToken {
 /// The chain is ordered root-first. Verification checks each token individually
 /// plus structural integrity: parent hash linkage, scope attenuation, depth
 /// limit, and issuer/subject linkage across hops.
+///
+/// # Examples
+///
+/// ```
+/// use okami::identity::{AgentIdentity, SpiffeId};
+/// use okami::delegation::{Capability, DelegationToken, DelegationChain};
+/// use std::time::Duration;
+///
+/// let orchestrator = AgentIdentity::new("example.com", "orchestrator").unwrap();
+/// let worker = AgentIdentity::new("example.com", "worker/1").unwrap();
+/// let sub_id = SpiffeId::new("example.com", "sub-worker/1").unwrap();
+/// let scopes = vec![Capability::new("read:db").unwrap()];
+///
+/// // Root token: orchestrator -> worker.
+/// let root = DelegationToken::issue(
+///     &orchestrator,
+///     worker.spiffe_id().clone(),
+///     scopes.clone(),
+///     &scopes,
+///     Duration::from_secs(3600),
+///     None,
+/// ).unwrap();
+///
+/// // Child token: worker -> sub-worker (attenuated scopes).
+/// let child = DelegationToken::issue(
+///     &worker,
+///     sub_id,
+///     scopes.clone(),
+///     &root.scopes,
+///     Duration::from_secs(1800),
+///     Some(&root),
+/// ).unwrap();
+///
+/// let chain = DelegationChain::new(vec![root, child]);
+/// chain.verify(None).unwrap();
+///
+/// // Effective scopes are the leaf token's scopes.
+/// assert_eq!(chain.effective_scopes().len(), 1);
+/// assert_eq!(chain.effective_scopes()[0].as_str(), "read:db");
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DelegationChain {
     /// Ordered tokens, root at index 0.
@@ -375,7 +467,17 @@ impl DelegationChain {
 
     /// Verify the entire delegation chain.
     ///
-    /// Checks per-token validity then structural integrity across all links.
+    /// Checks per-token validity then structural integrity across all links:
+    /// each token's signature and expiry, depth ordering, parent-hash linkage,
+    /// scope attenuation, and issuer/subject continuity across hops.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::ChainVerificationFailed`] if the chain is empty, a token's depth
+    ///   does not match its position, the parent hash does not match, a scope
+    ///   escalation is detected, or the issuer/subject chain is broken
+    /// - Any error propagated from [`DelegationToken::verify`] for each token
+    ///   (see its `# Errors` section)
     pub fn verify(&self, clock_skew: Option<StdDuration>) -> Result<()> {
         if self.tokens.is_empty() {
             return Err(Error::ChainVerificationFailed("chain is empty".to_string()));
@@ -454,6 +556,10 @@ impl DelegationChain {
     }
 
     /// Serialize this chain to bytes (bincode).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Serialization`] if bincode encoding fails.
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
         bincode::serialize(self).map_err(|e| Error::Serialization(format!("chain serialize: {e}")))
     }
@@ -486,10 +592,12 @@ impl DelegationChain {
 
     /// Render an ASCII tree visualization of this chain.
     ///
-    /// Example:
-    ///   [0] spiffe://example.com/orchestrator [read:db, write:api]
-    ///    -> [1] spiffe://example.com/worker [read:db]
-    ///        -> [2] spiffe://example.com/sub-worker [read:db]
+    /// Example output:
+    /// ```text
+    /// [0] spiffe://example.com/orchestrator [read:db, write:api]
+    ///  -> [1] spiffe://example.com/worker [read:db]
+    ///      -> [2] spiffe://example.com/sub-worker [read:db]
+    /// ```
     pub fn ascii_tree(&self) -> String {
         let mut out = String::new();
         for (i, token) in self.tokens.iter().enumerate() {

@@ -46,7 +46,7 @@
 //! @title Bounded bincode deserialization to prevent allocation DoS
 //! @status accepted
 //! @rationale bincode 1.x reads a raw u64 length prefix before allocating for
-//!   Vec<T>/String fields. A crafted payload with `[0xFF; 8]` as the first field
+//!   `Vec<T>`/String fields. A crafted payload with `[0xFF; 8]` as the first field
 //!   causes an immediate multi-exabyte allocation attempt, crashing the process.
 //!   Fix: use `DefaultOptions::with_fixint_encoding().allow_trailing_bytes().with_limit(N)`
 //!   which exactly mirrors the free-function encoding but adds an allocation cap.
@@ -156,6 +156,25 @@ pub const DOMAIN_REVOCATION: u8 = 0x03;
 /// - Trust domain must be non-empty and contain only valid hostname characters
 /// - Path (workload ID) must be non-empty
 /// - No query strings or fragments allowed
+///
+/// # Examples
+///
+/// ```
+/// use okami::identity::SpiffeId;
+///
+/// let id = SpiffeId::new("example.com", "agent/worker-1").unwrap();
+/// assert_eq!(id.trust_domain(), "example.com");
+/// assert_eq!(id.workload_path(), "/agent/worker-1");
+/// assert_eq!(id.as_str(), "spiffe://example.com/agent/worker-1");
+///
+/// // Parse an existing URI string.
+/// let parsed: SpiffeId = "spiffe://corp.internal/orchestrator".parse().unwrap();
+/// assert_eq!(parsed.trust_domain(), "corp.internal");
+///
+/// // Invalid inputs are rejected.
+/// assert!(SpiffeId::new("bad domain", "agent").is_err());
+/// assert!(SpiffeId::parse("http://not-spiffe/agent").is_err());
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SpiffeId {
     /// The full URI string, e.g. `spiffe://example.com/agent/worker-1`.
@@ -282,6 +301,24 @@ impl std::str::FromStr for SpiffeId {
 ///
 /// Serialized with serde/bincode. The `algo` field identifies the key type
 /// for forward compatibility. Version 1 uses hybrid Ed25519+ML-DSA-65.
+///
+/// # Examples
+///
+/// ```
+/// use okami::identity::{AgentIdentity, PqcCredential};
+///
+/// // Obtain a credential from an identity (contains only public material).
+/// let identity = AgentIdentity::new("example.com", "agent/worker").unwrap();
+/// let cred: PqcCredential = identity.credential();
+///
+/// assert!(!cred.is_expired());
+/// assert!(cred.is_valid_at(chrono::Utc::now()));
+///
+/// // Round-trip through bytes (e.g. for network transport).
+/// let bytes = cred.to_bytes().unwrap();
+/// let cred2 = PqcCredential::from_bytes(&bytes).unwrap();
+/// assert_eq!(cred.spiffe_id, cred2.spiffe_id);
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PqcCredential {
     /// SPIFFE ID identifying the agent this credential belongs to.
@@ -352,6 +389,30 @@ impl PqcCredential {
 /// Produced by [`AgentIdentity::revoke`]. The `target_credential_bytes` field
 /// contains the bincode-serialized [`PqcCredential`] being revoked; the
 /// `signature` covers those bytes.
+///
+/// # Examples
+///
+/// ```
+/// use okami::identity::AgentIdentity;
+///
+/// let identity = AgentIdentity::new("example.com", "agent/worker").unwrap();
+/// let cred = identity.credential();
+/// let cred_bytes = cred.to_bytes().unwrap();
+///
+/// // Produce a revocation statement signed by the identity.
+/// let stmt = identity.revoke().unwrap();
+/// assert!(!stmt.signature.is_empty());
+///
+/// // Verify the statement using the agent's public verifying key.
+/// let vk_bytes = cred.verifying_key_bytes.clone();
+/// let valid = stmt.verify(&vk_bytes, &cred_bytes).unwrap();
+/// assert!(valid);
+///
+/// // A wrong credential does not verify.
+/// let other = AgentIdentity::new("example.com", "agent/other").unwrap();
+/// let other_cred_bytes = other.credential().to_bytes().unwrap();
+/// assert!(!stmt.verify(&vk_bytes, &other_cred_bytes).unwrap());
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RevocationStatement {
     /// The bincode bytes of the credential being revoked.
@@ -423,6 +484,31 @@ impl RevocationStatement {
 ///   for a transition period
 /// - [`AgentIdentity::revoke`] — produce a signed revocation statement
 /// - [`AgentIdentity::is_expired`] — check if the current credential is expired
+///
+/// # Examples
+///
+/// ```
+/// use okami::identity::AgentIdentity;
+///
+/// // Generate a fresh identity.
+/// let identity = AgentIdentity::new("example.com", "agent/worker").unwrap();
+/// assert_eq!(identity.spiffe_id().trust_domain(), "example.com");
+///
+/// // Sign and verify arbitrary data.
+/// let sig = identity.sign(b"hello okami").unwrap();
+/// assert!(identity.verify(b"hello okami", &sig).unwrap());
+/// assert!(!identity.verify(b"tampered", &sig).unwrap());
+///
+/// // Share the public credential (safe to send to peers).
+/// let cred = identity.credential();
+/// assert!(!cred.is_expired());
+///
+/// // Persist and reload from stored bytes.
+/// let key_bytes = identity.signing_key_bytes();
+/// let reloaded = AgentIdentity::from_stored(cred, &key_bytes).unwrap();
+/// let sig2 = reloaded.sign(b"hello okami").unwrap();
+/// assert!(reloaded.verify(b"hello okami", &sig2).unwrap());
+/// ```
 pub struct AgentIdentity {
     spiffe_id: SpiffeId,
     signing_key: lupine::sign::HybridSigningKey65,
@@ -541,7 +627,7 @@ impl AgentIdentity {
     /// the provided `verifying_key_bytes`. Returns `Ok(true)` if valid,
     /// `Ok(false)` if the signature does not match.
     ///
-    /// Use the same `domain` constant that was passed to [`sign_with_domain`]
+    /// Use the same `domain` constant that was passed to [`AgentIdentity::sign_with_domain`]
     /// at the corresponding sign site.
     ///
     /// # Errors

@@ -51,6 +51,40 @@ pub const MAX_SIGNED_AUDIT_EVENT_BYTES: u64 = 16 * 1024;
 /// The `details` field is therefore stored as a pre-serialized JSON string
 /// (`details_json`). Use [`AuditEvent::details`] / [`AuditEvent::new`] for
 /// ergonomic `serde_json::Value` access.
+///
+/// # Examples
+///
+/// ```
+/// use okami::identity::{AgentIdentity, SpiffeId};
+/// use okami::audit::AuditEvent;
+///
+/// let identity = AgentIdentity::new("example.com", "agent/worker").unwrap();
+/// let vk_bytes = identity.credential().verifying_key_bytes.clone();
+///
+/// // First event in a new chain (no previous hash).
+/// let ev = AuditEvent::new(
+///     identity.spiffe_id().clone(),
+///     "delegation.issued",
+///     serde_json::json!({"target": "worker/1", "scopes": ["read:db"]}),
+///     None,
+/// );
+/// assert_eq!(ev.chain_hash, "");
+/// assert_eq!(ev.action, "delegation.issued");
+///
+/// // Sign to produce a verifiable event.
+/// let signed = ev.sign(&identity).unwrap();
+/// assert!(signed.verify(&vk_bytes).unwrap());
+///
+/// // Link the next event by passing the previous event's hash.
+/// let prev_hash = signed.hash_hex().unwrap();
+/// let ev2 = AuditEvent::new(
+///     identity.spiffe_id().clone(),
+///     "key.rotated",
+///     serde_json::json!({}),
+///     Some(prev_hash.clone()),
+/// );
+/// assert_eq!(ev2.chain_hash, prev_hash);
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEvent {
     /// Format version (currently 1).
@@ -140,6 +174,32 @@ impl AuditEvent {
 /// A signed audit event: an [`AuditEvent`] plus PQC signature bytes.
 ///
 /// Produced by [`AuditEvent::sign`]. Verify with [`SignedAuditEvent::verify`].
+///
+/// # Examples
+///
+/// ```
+/// use okami::identity::AgentIdentity;
+/// use okami::audit::{AuditEvent, SignedAuditEvent};
+///
+/// let identity = AgentIdentity::new("example.com", "agent/worker").unwrap();
+/// let vk_bytes = identity.credential().verifying_key_bytes.clone();
+///
+/// let ev = AuditEvent::new(
+///     identity.spiffe_id().clone(),
+///     "key.rotated",
+///     serde_json::json!({}),
+///     None,
+/// );
+/// let signed: SignedAuditEvent = ev.sign(&identity).unwrap();
+///
+/// // Signature is valid with the correct key.
+/// assert!(signed.verify(&vk_bytes).unwrap());
+///
+/// // Round-trip through bytes.
+/// let bytes = signed.to_bytes().unwrap();
+/// let signed2 = SignedAuditEvent::from_bytes(&bytes).unwrap();
+/// assert!(signed2.verify(&vk_bytes).unwrap());
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignedAuditEvent {
     /// The audit event payload.
@@ -193,6 +253,10 @@ impl SignedAuditEvent {
     }
 
     /// Serialize to bytes (bincode).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Serialization`] if bincode encoding fails.
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
         bincode::serialize(self)
             .map_err(|e| Error::Serialization(format!("signed event serialize: {e}")))

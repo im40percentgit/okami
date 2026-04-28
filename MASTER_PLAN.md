@@ -141,7 +141,8 @@ Appendix items A1 + A2 from the /cso 2026-04-24 audit have closed (PR #6, commit
 | DEC-OKAMI-017 | Domain-separated signatures across token / audit / revocation protocols (1-byte domain tag prepended before signing) | Without domain separation a signature crafted in one protocol could verify against another, enabling cross-protocol signature reuse. Wire-format break from pre-0.1.1 signatures. /cso Appendix A1. | `src/identity.rs`, `src/delegation.rs`, `src/audit.rs` |
 | DEC-OKAMI-018 | `load_signing_key` verifies file owner UID matches effective UID via libc `geteuid()` | Mode-0600 alone is insufficient — a key file owned by another UID can be silently replaced by that user. UID check matches full SSH model (ssh-keygen refuses non-owner keys). No new crate dep. /cso Appendix A2. | `src/identity.rs` |
 | DEC-OKAMI-019 | Public `RevocationStatement::verify(verifying_key_bytes, claimed_credential_bytes)` helper | Hand-reconstructing the signed payload (`target_bytes || revoked_at_secs.to_le_bytes()` under `DOMAIN_REVOCATION`) is a footgun that silently accepts forged revocations or rejects valid ones; first-party helper mirrors `DelegationToken::verify` and `SignedAuditEvent::verify` ergonomics. | `src/identity.rs` |
+| DEC-OKAMI-020 | `#![deny(missing_docs)]` at crate root + `# Errors` on every Result-returning public function + `# Examples` on flagship public types | Once published to crates.io every `pub` item is a stable contract; compile-time enforcement prevents API surface drifting away from documentation. | `src/lib.rs` |
 
 ## Review Status
 
-CEO + ENG CLEARED. Phase 1 complete. 19 decisions documented. Security hardening pass (/cso 2026-04-24) merged across PRs #1-#6.
+CEO + ENG CLEARED. Phase 1 complete. 20 decisions documented. Security hardening pass (/cso 2026-04-24) merged across PRs #1-#6.

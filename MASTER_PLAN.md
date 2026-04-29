@@ -102,7 +102,7 @@ Items the project will need before a public 1.0 release. Not blockers for curren
 | # | Item | Driver | Effort | Notes |
 |---|------|--------|--------|-------|
 | ~~PR-1~~ | ~~Publish to crates.io~~ | ~~maintainer~~ | ~~30 min~~ | ~~Closed: published as 0.2.0 on 2026-04-27, tag v0.2.0~~ |
-| PR-2 | `cargo-fuzz` integration with targets for `DelegationChain::from_bytes`, `SpiffeId::parse`, `PqcCredential::from_bytes`, `SignedAuditEvent::from_bytes` | implementer | half day | Existing proptest is partial coverage; libfuzzer goes deeper. Requires nightly toolchain in a separate CI workflow. |
+| ~~PR-2~~ | ~~`cargo-fuzz` integration with targets for `DelegationChain::from_bytes`, `SpiffeId::parse`, `PqcCredential::from_bytes`, `SignedAuditEvent::from_bytes`~~ | ~~implementer~~ | ~~half day~~ | ~~Closed: shipped via PR #26 (commit 6046eaf) on 2026-04-28~~ |
 | ~~PR-3~~ | ~~`cargo-deny` integration in CI~~ | ~~implementer~~ | ~~1-2 hours~~ | ~~Closed: shipped via PR #20 (commit d3c435c) on 2026-04-26~~ |
 | ~~PR-4~~ | ~~Multi-OS CI matrix (macOS + Windows for the test job)~~ | ~~implementer~~ | ~~1 hour~~ | ~~Closed: shipped via PR #22 (commit 024aef0, fix 6057b7c) on 2026-04-27~~ |
 | ~~PR-5~~ | ~~Doc-comment audit pass (run `cargo doc --no-deps --document-private-items`)~~ | ~~implementer~~ | ~~2-3 hours~~ | ~~Closed: shipped via PR #21 (commit 5571fd3) on 2026-04-26~~ |

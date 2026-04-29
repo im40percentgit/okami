@@ -5,8 +5,9 @@ publish = false
 edition = "2021"
 
 # cargo-fuzz creates a standalone workspace so it doesn't unify features with
-# the parent crate. Without this, feature resolution can activate a problematic
-# pkcs8 path on `ml-dsa-rc.7` that fails on current nightly.
+# the parent crate. lupine-sign >= 0.1.2 already disables ml-dsa's `pkcs8`
+# default feature (the source of the nightly compile bug in ml-dsa-rc.7), so
+# isolation here is defense-in-depth against future feature-unification surprises.
 [workspace]
 
 [package.metadata]
@@ -14,13 +15,6 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-# Pin pkcs8 to the rc version that ml-dsa-rc.7 and slh-dsa-rc.4 were written
-# against. pkcs8 0.11.0 stable changed KeyMalformed from a variant to a
-# function, which breaks compilation of those crates. An explicit version
-# requirement here forces the resolver to use the rc — cargo's minimal version
-# rules will still satisfy any dep requiring >= rc.10. Remove this pin when
-# ml-dsa / slh-dsa ship releases targeting pkcs8 0.11.0 stable.
-pkcs8 = "=0.11.0-rc.11"
 
 [dependencies.okami]
 path = ".."

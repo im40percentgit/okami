@@ -5,9 +5,7 @@ publish = false
 edition = "2021"
 
 # cargo-fuzz creates a standalone workspace so it doesn't unify features with
-# the parent crate. lupine-sign >= 0.1.2 already disables ml-dsa's `pkcs8`
-# default feature (the source of the nightly compile bug in ml-dsa-rc.7), so
-# isolation here is defense-in-depth against future feature-unification surprises.
+# the parent crate.
 [workspace]
 
 [package.metadata]
@@ -15,6 +13,20 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+# Pin pkcs8 to the rc series. With the pin removed, cargo resolves to
+# pkcs8 0.11.0 (stable), where `Error::KeyMalformed` became a tuple variant
+# `KeyMalformed(KeyError)` instead of the old unit/fn-pointer form. That breaks
+# slh-dsa-0.2.0-rc.4's source (it uses `pkcs8::Error::KeyMalformed` as a
+# function pointer in `?`-position) — slh-dsa hits the same upstream bug
+# pattern that lupine-sign 0.1.2 worked around for ml-dsa-rc.7.
+#
+# lupine-sign 0.1.2 set `default-features = false` on its `ml-dsa` dep, which
+# eliminated the ml-dsa half of the problem (its pkcs8.rs is feature-gated and
+# now never compiled). slh-dsa's broken code is **not** behind a feature flag,
+# so the same trick can't be applied — see lupine-sign Cargo.toml comment.
+#
+# Remove this pin once slh-dsa ships a release targeting pkcs8 0.11.0 stable.
+pkcs8 = "=0.11.0-rc.11"
 
 [dependencies.okami]
 path = ".."

@@ -806,9 +806,9 @@ dependencies = [
 
 [[package]]
 name = "lupine-sign"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef83472744a43b9d0547212ca0b6ad87c34ffc7326e3346ced50b2d53812b15e"
+checksum = "a12768f1e171a7b6279e0dbebc1b3f078f9216206553d409be014b3c6fa2e044"
 dependencies = [
  "ed25519-dalek",
  "lupine-core",
